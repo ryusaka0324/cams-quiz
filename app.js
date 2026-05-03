@@ -223,6 +223,7 @@ const App = {
     const isMain = ['home','practice','textbook','exam','review','stats'].includes(screen);
     document.getElementById('back-btn').classList.toggle('hidden', isMain);
     document.getElementById('tab-nav').style.display = isMain ? 'flex' : 'none';
+    document.body.classList.toggle('has-tab-nav', isMain);
     
     const renderers = {
       home: () => this.renderHome(),
