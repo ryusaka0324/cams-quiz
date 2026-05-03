@@ -702,8 +702,10 @@ const App = {
     const banner = `
       <div class="result-banner ${isCorrect ? 'correct' : 'incorrect'}">
         <div class="icon">${isCorrect ? '✅' : '❌'}</div>
-        <div class="label">${isCorrect ? '正解！' : '不正解'}</div>
-        ${!isCorrect ? `<div class="points">正解は ${q.answer} でした</div>` : ''}
+        <div class="text-content">
+          <div class="label">${isCorrect ? '正解！' : '不正解'}</div>
+          ${!isCorrect ? `<div class="points">正解は ${q.answer} でした</div>` : ''}
+        </div>
       </div>
       <div class="explanation-card">
         <div class="label">📖 解説</div>
