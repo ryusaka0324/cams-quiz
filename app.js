@@ -700,19 +700,12 @@ const App = {
     });
 
     const banner = `
-      <div class="result-banner ${isCorrect ? 'correct' : 'incorrect'}">
-        <div class="icon">${isCorrect ? '✅' : '❌'}</div>
-        <div class="text-content">
-          <div class="label">${isCorrect ? '正解！' : '不正解'}</div>
-          ${!isCorrect ? `<div class="points">正解は ${q.answer} でした</div>` : ''}
-        </div>
-      </div>
       <div class="explanation-card">
         <div class="label">📖 解説</div>
         <div class="text">${this.escapeHtml(q.explanation)}</div>
       </div>
-      <div class="action-row">
-        <button class="btn-secondary" id="bookmark-after">🔖 復習</button>
+      <div class="fixed-actions">
+        <button class="btn-secondary" id="bookmark-after">🔖</button>
         <button class="btn-primary" id="next-btn">次の問題 →</button>
       </div>
     `;
