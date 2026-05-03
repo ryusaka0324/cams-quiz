@@ -13,7 +13,7 @@ const App = {
     currentSession: null,
     examState: null,
     textbookState: { unit: null, page: null },
-    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16 }
+    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16, todayLearningCount: 20 }
   },
 
   // ========== 起動処理 ==========
@@ -63,7 +63,8 @@ const App = {
   },
 
   loadSettings() {
-    this.state.settings = this.storage.get('settings', this.state.settings);
+    const defaults = { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16, todayLearningCount: 20 };
+    this.state.settings = { ...defaults, ...this.storage.get('settings', {}) };
   },
   saveSettings() {
     this.storage.set('settings', this.state.settings);
@@ -241,8 +242,9 @@ const App = {
 
     return { due, overdue, scheduled };
   },
-  getTodayLearningQuestions(limit = 20) {
+  getTodayLearningQuestions(limit = null) {
     const progress = this.getProgress();
+    limit = limit || this.state.settings.todayLearningCount || 20;
     const today = this.formatDate(new Date());
     const selected = [];
     const used = new Set();
@@ -284,7 +286,8 @@ const App = {
     return selected;
   },
   startTodayLearningSession(from = 'home') {
-    const qs = this.getTodayLearningQuestions(20);
+    const count = this.state.settings.todayLearningCount || 20;
+    const qs = this.getTodayLearningQuestions(count);
     if (qs.length === 0) {
       alert('今日の学習対象はまだありません。まずはユニット別演習かランダム出題で問題を解いてください。');
       return;
@@ -292,7 +295,8 @@ const App = {
     this.startSession(qs, '今日の学習', { from });
   },
   startDueReviewSession(from = 'review') {
-    const qs = this.getDueReviewQuestions(20);
+    const count = this.state.settings.todayLearningCount || 20;
+    const qs = this.getDueReviewQuestions(count);
     if (qs.length === 0) {
       alert('今日が復習期限の問題はありません。');
       return;
@@ -426,7 +430,9 @@ const App = {
     
     const weak = this.getWeaknesses(3);
     const reviewSummary = this.getReviewSummary();
-    const todayPlanCount = this.getTodayLearningQuestions(20).length;
+    const todayLearningCount = this.state.settings.todayLearningCount || 20;
+    const todayPlanCount = this.getTodayLearningQuestions(todayLearningCount).length;
+    const countOptions = [5, 10, 20, 30, 50, 100];
 
     let html = `
       <div class="greeting">
@@ -460,6 +466,12 @@ const App = {
           <div class="review-pill"><span>期限切れ</span><strong>${reviewSummary.overdue}</strong></div>
           <div class="review-pill"><span>今日の復習</span><strong>${reviewSummary.due}</strong></div>
           <div class="review-pill"><span>予約済み</span><strong>${reviewSummary.scheduled}</strong></div>
+        </div>
+        <div class="study-count-selector">
+          <div class="study-count-label">今回解く問題数</div>
+          <div class="study-count-buttons">
+            ${countOptions.map(n => `<button class="count-chip ${n === todayLearningCount ? 'active' : ''}" data-count="${n}">${n}</button>`).join('')}
+          </div>
         </div>
         <button class="btn-primary today-study-btn" id="today-study-btn">今日の学習を始める</button>
       </div>
@@ -547,6 +559,14 @@ const App = {
       }
     });
     
+    document.querySelectorAll('.count-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.state.settings.todayLearningCount = Number(btn.dataset.count);
+        this.saveSettings();
+        this.renderHome();
+      });
+    });
+
     document.getElementById('today-study-btn')?.addEventListener('click', () => {
       this.startTodayLearningSession('home');
     });
@@ -582,7 +602,9 @@ const App = {
     });
 
     const reviewSummary = this.getReviewSummary();
-    const todayPlanCount = this.getTodayLearningQuestions(20).length;
+    const todayLearningCount = this.state.settings.todayLearningCount || 20;
+    const todayPlanCount = this.getTodayLearningQuestions(todayLearningCount).length;
+    const countOptions = [5, 10, 20, 30, 50, 100];
 
     let html = `
       <div class="mode-card featured-mode" id="today-learning-mode">
@@ -594,9 +616,15 @@ const App = {
           </div>
         </div>
         <div class="mode-metrics">
+          <span>今回 ${todayLearningCount}問</span>
           <span>期限切れ ${reviewSummary.overdue}</span>
           <span>復習 ${reviewSummary.due}</span>
           <span>予約済み ${reviewSummary.scheduled}</span>
+        </div>
+        <div class="study-count-selector compact">
+          <div class="study-count-buttons">
+            ${countOptions.map(n => `<button class="count-chip ${n === todayLearningCount ? 'active' : ''}" data-count="${n}">${n}</button>`).join('')}
+          </div>
         </div>
       </div>
 
@@ -669,6 +697,15 @@ const App = {
         const unit = row.dataset.unit;
         const qs = this.state.questions.filter(q => q.unit === unit);
         this.startSession(qs, `${unit} 順番通り`, { from: 'practice' });
+      });
+    });
+
+    document.querySelectorAll('.count-chip').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.state.settings.todayLearningCount = Number(btn.dataset.count);
+        this.saveSettings();
+        this.renderPractice();
       });
     });
 
@@ -1282,6 +1319,7 @@ const App = {
     );
     const bookmarked = this.state.questions.filter(q => bookmarks.includes(q.id));
     const dueReview = this.getDueReviewQuestions(999);
+    const todayLearningCount = this.state.settings.todayLearningCount || 20;
     const repeatWrong = this.state.questions.filter(q => {
       const p = progress[q.id];
       if (!p || p.history.length < 2) return false;
@@ -1297,7 +1335,7 @@ const App = {
         <button class="stat-tab" data-tab="bookmark">🔖 ${bookmarks.length}</button>
       </div>
       <div id="review-content"></div>
-      ${dueReview.length > 0 ? `<button class="btn-primary" id="due-review" style="margin-top:16px;">🧠 今日の復習を始める</button>` : ''}
+      ${dueReview.length > 0 ? `<button class="btn-primary" id="due-review" style="margin-top:16px;">🧠 今日の復習を${Math.min(todayLearningCount, dueReview.length)}問始める</button>` : ''}
       ${wrong.length > 0 ? `<button class="btn-secondary" id="quick-review" style="margin-top:12px;width:100%;">🎲 誤答から5問復習</button>` : ''}
     `;
     document.getElementById('content').innerHTML = html;

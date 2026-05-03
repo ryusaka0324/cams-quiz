@@ -1608,3 +1608,73 @@ input:focus-visible {
     font-size: 22px;
   }
 }
+
+
+/* v11: 今日の学習 問題数選択 */
+.study-count-selector {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--card) 72%, var(--bg-secondary));
+  border: 1px solid var(--border);
+}
+
+.study-count-selector.compact {
+  margin-top: 12px;
+  padding: 10px;
+}
+
+.study-count-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.study-count-buttons {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.count-chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 9px 0;
+  font-size: 13px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform .12s ease, background .12s ease, border-color .12s ease;
+}
+
+.count-chip:active {
+  transform: scale(.96);
+}
+
+.count-chip.active {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+  box-shadow: 0 10px 22px rgba(29,78,216,0.22);
+}
+
+.setting-row select {
+  min-width: 112px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+}
+
+@media (max-width: 420px) {
+  .study-count-buttons {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
