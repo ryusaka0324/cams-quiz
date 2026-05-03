@@ -793,40 +793,128 @@ canvas { max-width: 100%; }
 /* テキストページの表示 */
 .textbook-page-content {
   background: var(--card);
-  padding: 20px;
+  padding: 24px 22px;
   border-radius: 16px;
   box-shadow: var(--shadow-card);
   font-size: var(--tb-font-size, 16px);
-  line-height: 1.85;
+  line-height: 1.9;
 }
 .textbook-page-content h2 {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 22px;
+  font-weight: 800;
   color: var(--primary);
-  margin: 16px 0 12px;
-  padding-bottom: 8px;
-  border-bottom: 2px solid var(--primary-light);
+  margin: 4px 0 18px;
+  padding-bottom: 10px;
+  border-bottom: 3px solid var(--primary);
+  letter-spacing: 0.02em;
 }
 .textbook-page-content h3 {
   font-size: 17px;
   font-weight: 700;
-  margin: 20px 0 10px;
+  margin: 24px 0 12px;
+  padding: 6px 0 6px 12px;
   color: var(--text);
+  border-left: 4px solid var(--primary-light);
+  background: rgba(30, 64, 175, 0.04);
+  border-radius: 0 6px 6px 0;
+  letter-spacing: 0.02em;
+}
+.textbook-page-content h3.case-head {
+  background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+  border-left: 4px solid var(--warning);
+  color: #92400E;
+}
+[data-theme="dark"] .textbook-page-content h3.case-head {
+  background: rgba(245, 158, 11, 0.15);
+  color: #FCD34D;
+}
+.textbook-page-content h3.key-points-head {
+  background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+  border-left: 4px solid #F59E0B;
+  color: #78350F;
+  font-size: 18px;
+  font-weight: 800;
+}
+[data-theme="dark"] .textbook-page-content h3.key-points-head {
+  background: rgba(245, 158, 11, 0.2);
+  color: #FCD34D;
+}
+.textbook-page-content h3.intro-head {
+  background: linear-gradient(135deg, #DBEAFE, #BFDBFE);
+  border-left: 4px solid var(--primary);
+  color: var(--primary-dark);
+}
+[data-theme="dark"] .textbook-page-content h3.intro-head {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--primary-light);
+}
+.textbook-page-content h3.def-head {
+  background: linear-gradient(135deg, #D1FAE5, #A7F3D0);
+  border-left: 4px solid var(--success);
+  color: #065F46;
+}
+[data-theme="dark"] .textbook-page-content h3.def-head {
+  background: rgba(16, 185, 129, 0.15);
+  color: #6EE7B7;
+}
+.textbook-page-content h3.note-head {
+  background: linear-gradient(135deg, #FEE2E2, #FECACA);
+  border-left: 4px solid var(--danger);
+  color: #991B1B;
+}
+[data-theme="dark"] .textbook-page-content h3.note-head {
+  background: rgba(239, 68, 68, 0.15);
+  color: #FCA5A5;
+}
+.textbook-page-content h3.ref-head {
+  background: linear-gradient(135deg, #E0E7FF, #C7D2FE);
+  border-left: 4px solid #6366F1;
+  color: #3730A3;
+}
+[data-theme="dark"] .textbook-page-content h3.ref-head {
+  background: rgba(99, 102, 241, 0.15);
+  color: #A5B4FC;
 }
 .textbook-page-content p {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   color: var(--text);
+  text-align: justify;
+}
+.textbook-page-content p:last-child { margin-bottom: 0; }
+.textbook-page-content ul {
+  margin: 8px 0 18px;
+  padding-left: 4px;
+  list-style: none;
+}
+.textbook-page-content li {
+  position: relative;
+  padding-left: 24px;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+.textbook-page-content li::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 0.6em;
+  width: 8px;
+  height: 8px;
+  background: var(--primary-light);
+  border-radius: 50%;
+}
+.textbook-page-content strong {
+  color: var(--primary-dark);
+  font-weight: 700;
+}
+[data-theme="dark"] .textbook-page-content strong {
+  color: var(--primary-light);
 }
 .textbook-page-content .case-study {
   background: var(--warning-light);
   border-left: 4px solid var(--warning);
-  padding: 12px 14px;
+  padding: 14px 16px;
   border-radius: 8px;
-  margin: 14px 0;
-}
-.textbook-page-content li {
-  margin-left: 20px;
-  margin-bottom: 6px;
+  margin: 16px 0;
 }
 
 /* 画像ページの表示 */
