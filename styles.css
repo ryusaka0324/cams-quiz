@@ -141,8 +141,8 @@ body {
   font-family: inherit;
 }
 .tab-btn.active { color: var(--primary); }
-.tab-icon { font-size: 22px; margin-bottom: 2px; }
-.tab-label { font-size: 11px; font-weight: 500; }
+.tab-icon { font-size: 20px; margin-bottom: 2px; }
+.tab-label { font-size: 10px; font-weight: 500; }
 
 /* ===== ホーム画面 ===== */
 .greeting { padding: 16px 0; }
@@ -453,8 +453,11 @@ body {
   flex: 1;
 }
 
-/* 解説下に余白を追加して固定ボタンに被らないように */
-.explanation-card { margin-bottom: 80px; }
+/* 固定ボタンが画面下にあるとき、コンテンツ全体に下余白を確保 */
+#content:has(.fixed-actions),
+#content.has-fixed-bar {
+  padding-bottom: calc(var(--tab-h) + var(--safe-bottom) + 100px) !important;
+}
 
 .explanation-card {
   background: var(--card);
@@ -703,3 +706,198 @@ canvas { max-width: 100%; }
 .flex { display: flex; }
 .gap-8 { gap: 8px; }
 .gap-12 { gap: 12px; }
+
+/* ========================================
+   教科書モード
+   ======================================== */
+
+/* ユニット選択画面 */
+.textbook-unit-card {
+  background: var(--card);
+  padding: 18px 20px;
+  border-radius: 14px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  transition: transform 0.15s;
+}
+.textbook-unit-card:active { transform: scale(0.98); }
+.textbook-unit-icon {
+  width: 48px; height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  color: white;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 700;
+  flex-shrink: 0;
+}
+.textbook-unit-info { flex: 1; }
+.textbook-unit-info .title { font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+.textbook-unit-info .meta { font-size: 12px; color: var(--text-secondary); }
+.textbook-unit-arrow { font-size: 18px; color: var(--text-light); }
+
+/* ページコントロール（上部） */
+.textbook-controls {
+  position: sticky;
+  top: var(--header-h);
+  background: var(--bg);
+  padding: 12px 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.textbook-page-jump {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.textbook-page-jump input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  width: 60px;
+  text-align: center;
+}
+.textbook-page-jump input:focus { outline: none; }
+.textbook-page-jump .total {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.textbook-nav-btn {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  font-size: 18px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.textbook-nav-btn:active { background: var(--bg-secondary); }
+.textbook-nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* テキストページの表示 */
+.textbook-page-content {
+  background: var(--card);
+  padding: 20px;
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  font-size: var(--tb-font-size, 16px);
+  line-height: 1.85;
+}
+.textbook-page-content h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--primary);
+  margin: 16px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--primary-light);
+}
+.textbook-page-content h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 20px 0 10px;
+  color: var(--text);
+}
+.textbook-page-content p {
+  margin-bottom: 14px;
+  color: var(--text);
+}
+.textbook-page-content .case-study {
+  background: var(--warning-light);
+  border-left: 4px solid var(--warning);
+  padding: 12px 14px;
+  border-radius: 8px;
+  margin: 14px 0;
+}
+.textbook-page-content li {
+  margin-left: 20px;
+  margin-bottom: 6px;
+}
+
+/* 画像ページの表示 */
+.textbook-image-wrapper {
+  background: white;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+  text-align: center;
+}
+.textbook-image-wrapper img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* ページめくりボタン（下） */
+.textbook-bottom-nav {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  padding-bottom: 20px;
+}
+.textbook-bottom-nav button {
+  flex: 1;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.textbook-bottom-nav button:active { background: var(--bg-secondary); }
+.textbook-bottom-nav button:disabled { opacity: 0.3; }
+
+/* フォントサイズ調整ボタン */
+.textbook-font-size {
+  display: flex;
+  gap: 4px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+}
+.textbook-font-size button {
+  width: 32px; height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 8px;
+  font-family: inherit;
+}
+.textbook-font-size button.active {
+  background: var(--primary);
+  color: white;
+  font-weight: 700;
+}
+
+/* 問題画面の「📖 教科書を見る」ボタン */
+.see-textbook-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--primary);
+  cursor: pointer;
+  margin-top: 4px;
+}
+.see-textbook-link:active { opacity: 0.6; }

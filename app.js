@@ -7,11 +7,13 @@ const App = {
   // ========== 状態管理 ==========
   state: {
     questions: [],
+    textbook: null,
     currentScreen: 'home',
     currentQuestion: null,
     currentSession: null,
     examState: null,
-    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10 }
+    textbookState: { unit: null, page: null },
+    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16 }
   },
 
   // ========== 起動処理 ==========
@@ -26,6 +28,14 @@ const App = {
       console.error('Failed to load questions', e);
       alert('問題データの読み込みに失敗しました');
       return;
+    }
+
+    // 教科書データを読み込む（失敗してもアプリは起動する）
+    try {
+      const res = await fetch('./textbook.json');
+      this.state.textbook = await res.json();
+    } catch (e) {
+      console.warn('Textbook not available', e);
     }
 
     this.checkStreak();
@@ -206,16 +216,18 @@ const App = {
 
   navigate(screen, params = {}) {
     this.state.currentScreen = screen;
+    document.getElementById('content').classList.remove('has-fixed-bar');
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tab === screen);
     });
-    const isMain = ['home','practice','exam','review','stats'].includes(screen);
+    const isMain = ['home','practice','textbook','exam','review','stats'].includes(screen);
     document.getElementById('back-btn').classList.toggle('hidden', isMain);
     document.getElementById('tab-nav').style.display = isMain ? 'flex' : 'none';
     
     const renderers = {
       home: () => this.renderHome(),
       practice: () => this.renderPractice(),
+      textbook: () => this.renderTextbookHome(),
       exam: () => this.renderExamIntro(),
       review: () => this.renderReview(),
       stats: () => this.renderStats(),
@@ -224,7 +236,8 @@ const App = {
       'exam-active': () => this.renderExamActive(),
       'exam-result': () => this.renderExamResult(params),
       'session-complete': () => this.renderSessionComplete(),
-      'search': () => this.renderSearch()
+      'search': () => this.renderSearch(),
+      'textbook-viewer': () => this.renderTextbookViewer(params)
     };
     if (renderers[screen]) renderers[screen]();
     window.scrollTo(0, 0);
@@ -237,7 +250,8 @@ const App = {
       'exam-active': 'exam',
       'exam-result': 'exam',
       'session-complete': 'home',
-      'search': 'home'
+      'search': 'home',
+      'textbook-viewer': 'textbook'
     };
     this.navigate(flow[this.state.currentScreen] || 'home');
   },
@@ -639,7 +653,7 @@ const App = {
         <button class="icon-btn" id="bookmark-btn">${isBookmarked ? '🔖' : '📑'}</button>
       </div>
       
-      <div class="q-page">${q.unit} #${q.no} ・ p.${q.page} ・ ${q.section}</div>
+      <div class="q-page">${q.unit} #${q.no} ・ p.${q.page} ・ ${q.section}<br><span class="see-textbook-link" id="see-textbook">📖 教科書のp.${q.page}を見る</span></div>
 
       <div class="question-card">${this.escapeHtml(q.question)}</div>
 
@@ -680,6 +694,10 @@ const App = {
       this.vibrate(15);
     });
 
+    document.getElementById('see-textbook')?.addEventListener('click', () => {
+      this.jumpToTextbook(q.unit, q.page);
+    });
+
     this.setupSwipe();
   },
 
@@ -713,6 +731,7 @@ const App = {
     const actionsArea = document.querySelector('.answer-actions');
     actionsArea.outerHTML = '';
     document.getElementById('content').insertAdjacentHTML('beforeend', banner);
+    document.getElementById('content').classList.add('has-fixed-bar');
     
     document.getElementById('next-btn').addEventListener('click', () => {
       this.state.currentSession.index++;
@@ -1369,6 +1388,211 @@ const App = {
         }
       }
     });
+  },
+
+  // ========== 教科書モード ==========
+  renderTextbookHome() {
+    this.setTitle('教科書');
+    
+    if (!this.state.textbook) {
+      document.getElementById('content').innerHTML = `
+        <div class="empty-state">
+          <div class="icon">📚</div>
+          <div class="text">教科書データを読み込めませんでした</div>
+        </div>
+      `;
+      return;
+    }
+
+    const lastRead = this.storage.get('lastTextbookPage', null);
+    
+    let html = `
+      <div style="margin-bottom:16px;">
+        <h2 style="font-size:22px;font-weight:700;margin-bottom:4px;">📖 スタディガイド</h2>
+        <p style="color:var(--text-secondary);font-size:13px;">CAMS試験対策v7.03 全モジュール</p>
+      </div>
+    `;
+    
+    if (lastRead) {
+      const tb = this.state.textbook[lastRead.unit];
+      if (tb) {
+        html += `
+          <div class="continue-card" id="continue-textbook">
+            <div class="label">📖 続きから</div>
+            <div class="title">${tb.title} p.${lastRead.page}</div>
+            <div class="meta">タップで再開 →</div>
+          </div>
+        `;
+      }
+    }
+
+    html += `<div class="section-title">ユニット選択</div>`;
+
+    const units = ['U1', 'U2', 'U3', 'U4', 'U5'];
+    units.forEach(code => {
+      const tb = this.state.textbook[code];
+      if (!tb) return;
+      const typeLabel = tb.type === 'image' ? '画像表示' : 'テキスト表示';
+      html += `
+        <div class="textbook-unit-card" data-unit="${code}">
+          <div class="textbook-unit-icon">${code}</div>
+          <div class="textbook-unit-info">
+            <div class="title">${tb.title}</div>
+            <div class="meta">${tb.total_pages}ページ ・ ${typeLabel}</div>
+          </div>
+          <div class="textbook-unit-arrow">›</div>
+        </div>
+      `;
+    });
+
+    document.getElementById('content').innerHTML = html;
+
+    document.querySelectorAll('.textbook-unit-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const unit = card.dataset.unit;
+        this.navigate('textbook-viewer', { unit, pageIdx: 0 });
+      });
+    });
+
+    if (lastRead) {
+      document.getElementById('continue-textbook')?.addEventListener('click', () => {
+        const tb = this.state.textbook[lastRead.unit];
+        const pageIdx = tb.pages.findIndex(p => String(p.page) === String(lastRead.page));
+        this.navigate('textbook-viewer', { 
+          unit: lastRead.unit, 
+          pageIdx: pageIdx >= 0 ? pageIdx : 0 
+        });
+      });
+    }
+  },
+
+  renderTextbookViewer(params) {
+    const unit = params.unit || this.state.textbookState.unit;
+    let pageIdx = params.pageIdx !== undefined ? params.pageIdx : this.state.textbookState.page || 0;
+    
+    const tb = this.state.textbook[unit];
+    if (!tb) { this.navigate('textbook'); return; }
+    
+    pageIdx = Math.max(0, Math.min(tb.total_pages - 1, pageIdx));
+    const page = tb.pages[pageIdx];
+    
+    this.state.textbookState = { unit, page: pageIdx };
+    this.setTitle(`${tb.title}`);
+    this.storage.set('lastTextbookPage', { unit, page: page.page, pageIdx });
+
+    const fontSize = this.state.settings.textbookFontSize || 16;
+
+    let html = `
+      <div class="textbook-controls">
+        <button class="textbook-nav-btn" id="tb-prev" ${pageIdx === 0 ? 'disabled' : ''}>‹</button>
+        <div class="textbook-page-jump">
+          <span style="font-size:13px;color:var(--text-secondary);">p.</span>
+          <input type="text" id="tb-page-input" value="${page.page}" inputmode="numeric">
+          <span class="total">/ ${tb.pages[tb.pages.length-1].page}</span>
+        </div>
+        <button class="textbook-nav-btn" id="tb-next" ${pageIdx === tb.total_pages - 1 ? 'disabled' : ''}>›</button>
+        <div class="textbook-font-size">
+          <button data-size="14" class="${fontSize===14?'active':''}">A</button>
+          <button data-size="16" class="${fontSize===16?'active':''}">A</button>
+          <button data-size="18" class="${fontSize===18?'active':''}">A</button>
+        </div>
+      </div>
+    `;
+
+    if (tb.type === 'text') {
+      html += `<div class="textbook-page-content" style="--tb-font-size:${fontSize}px;font-size:${fontSize}px;">${page.html}</div>`;
+    } else {
+      html += `<div class="textbook-image-wrapper"><img src="${page.image}" alt="p.${page.page}" loading="eager"></div>`;
+    }
+
+    html += `
+      <div class="textbook-bottom-nav">
+        <button id="tb-prev-bottom" ${pageIdx === 0 ? 'disabled' : ''}>← 前のページ</button>
+        <button id="tb-next-bottom" ${pageIdx === tb.total_pages - 1 ? 'disabled' : ''}>次のページ →</button>
+      </div>
+    `;
+
+    document.getElementById('content').innerHTML = html;
+
+    const goPage = (idx) => {
+      this.navigate('textbook-viewer', { unit, pageIdx: idx });
+    };
+
+    document.getElementById('tb-prev')?.addEventListener('click', () => goPage(pageIdx - 1));
+    document.getElementById('tb-next')?.addEventListener('click', () => goPage(pageIdx + 1));
+    document.getElementById('tb-prev-bottom')?.addEventListener('click', () => goPage(pageIdx - 1));
+    document.getElementById('tb-next-bottom')?.addEventListener('click', () => goPage(pageIdx + 1));
+
+    document.getElementById('tb-page-input')?.addEventListener('change', (e) => {
+      const val = e.target.value.trim();
+      const idx = tb.pages.findIndex(p => String(p.page) === String(val));
+      if (idx >= 0) goPage(idx);
+      else e.target.value = page.page;
+    });
+
+    document.querySelectorAll('.textbook-font-size button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const size = parseInt(btn.dataset.size);
+        this.state.settings.textbookFontSize = size;
+        this.saveSettings();
+        this.renderTextbookViewer({ unit, pageIdx });
+      });
+    });
+
+    // スワイプでページめくり
+    this.setupTextbookSwipe(unit, pageIdx);
+  },
+
+  setupTextbookSwipe(unit, pageIdx) {
+    const content = document.getElementById('content');
+    let startX = 0, startY = 0;
+    const onStart = (e) => {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    };
+    const onEnd = (e) => {
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      if (Math.abs(dx) > 80 && Math.abs(dy) < 50) {
+        const tb = this.state.textbook[unit];
+        if (dx < 0 && pageIdx < tb.total_pages - 1) {
+          this.navigate('textbook-viewer', { unit, pageIdx: pageIdx + 1 });
+        } else if (dx > 0 && pageIdx > 0) {
+          this.navigate('textbook-viewer', { unit, pageIdx: pageIdx - 1 });
+        }
+      }
+    };
+    content.addEventListener('touchstart', onStart, { passive: true });
+    content.addEventListener('touchend', onEnd, { passive: true });
+  },
+
+  // 問題画面から該当ページへジャンプ
+  jumpToTextbook(unit, pageNum) {
+    if (!this.state.textbook || !this.state.textbook[unit]) {
+      alert('該当の教科書ページが見つかりません');
+      return;
+    }
+    const tb = this.state.textbook[unit];
+    const idx = tb.pages.findIndex(p => String(p.page) === String(pageNum));
+    if (idx >= 0) {
+      this.navigate('textbook-viewer', { unit, pageIdx: idx });
+    } else {
+      // 近いページを探す
+      const numPage = parseInt(pageNum);
+      let closest = -1, minDiff = Infinity;
+      tb.pages.forEach((p, i) => {
+        const pn = parseInt(p.page);
+        if (!isNaN(pn)) {
+          const diff = Math.abs(pn - numPage);
+          if (diff < minDiff) { minDiff = diff; closest = i; }
+        }
+      });
+      if (closest >= 0) {
+        this.navigate('textbook-viewer', { unit, pageIdx: closest });
+      } else {
+        this.navigate('textbook-viewer', { unit, pageIdx: 0 });
+      }
+    }
   },
 
   escapeHtml(s) {

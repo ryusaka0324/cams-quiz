@@ -1,11 +1,12 @@
 // CAMS PWA Service Worker - オフライン対応
-const CACHE_NAME = 'cams-v1';
+const CACHE_NAME = 'cams-v2';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './questions.json',
+  './textbook.json',
   './manifest.json'
 ];
 
