@@ -458,7 +458,7 @@ const App = {
           <span class="mode-icon">💪</span>
           <div class="mode-info">
             <div class="title">弱点克服モード</div>
-            <div class="desc">AIが苦手分野を自動選定 → 10問</div>
+            <div class="desc">正答率から苦手問題を自動選定 → 10問</div>
           </div>
         </div>
       </div>
@@ -640,7 +640,7 @@ const App = {
 
     const isBookmarked = this.isBookmarked(q.id);
     const lvClass = q.level === 'Lv.1' ? 'lv1' : q.level === 'Lv.2' ? 'lv2' : 'lv3';
-    const progress = ((session.index) / session.questions.length) * 100;
+    const progress = ((session.index + 1) / session.questions.length) * 100;
 
     let html = `
       <div class="question-progress"><div class="fill" style="width:${progress}%"></div></div>
@@ -718,6 +718,13 @@ const App = {
     });
 
     const banner = `
+      <div class="result-feedback ${isCorrect ? 'correct' : 'incorrect'}">
+        <div class="result-feedback-icon">${isCorrect ? '✓' : '!'}</div>
+        <div>
+          <div class="result-feedback-title">${isCorrect ? '正解' : '不正解'}</div>
+          <div class="result-feedback-meta">正答：${q.answer} ／ あなたの解答：${userAnswer}</div>
+        </div>
+      </div>
       <div class="explanation-card">
         <div class="label">📖 解説</div>
         <div class="text">${this.escapeHtml(q.explanation)}</div>
