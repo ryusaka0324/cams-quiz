@@ -1,0 +1,1388 @@
+/* ============================================
+   CAMS試験対策 PWA - Application Logic
+   v2.0 Full Feature
+   ============================================ */
+
+const App = {
+  // ========== 状態管理 ==========
+  state: {
+    questions: [],
+    currentScreen: 'home',
+    currentQuestion: null,
+    currentSession: null,
+    examState: null,
+    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10 }
+  },
+
+  // ========== 起動処理 ==========
+  async init() {
+    this.loadSettings();
+    this.applyTheme();
+    
+    try {
+      const res = await fetch('./questions.json');
+      this.state.questions = await res.json();
+    } catch (e) {
+      console.error('Failed to load questions', e);
+      alert('問題データの読み込みに失敗しました');
+      return;
+    }
+
+    this.checkStreak();
+    this.bindEvents();
+    
+    setTimeout(() => {
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('main-app').classList.remove('hidden');
+      this.navigate('home');
+    }, 800);
+  },
+
+  // ========== LocalStorage ==========
+  storage: {
+    get(key, defaultValue = null) {
+      try {
+        const v = localStorage.getItem(`cams.${key}`);
+        return v ? JSON.parse(v) : defaultValue;
+      } catch { return defaultValue; }
+    },
+    set(key, value) {
+      try { localStorage.setItem(`cams.${key}`, JSON.stringify(value)); }
+      catch (e) { console.error('Storage error', e); }
+    }
+  },
+
+  loadSettings() {
+    this.state.settings = this.storage.get('settings', this.state.settings);
+  },
+  saveSettings() {
+    this.storage.set('settings', this.state.settings);
+  },
+
+  applyTheme() {
+    document.documentElement.setAttribute('data-theme', this.state.settings.darkMode ? 'dark' : 'light');
+    document.getElementById('theme-toggle').textContent = this.state.settings.darkMode ? '☀️' : '🌙';
+  },
+
+  // ========== 進捗管理 ==========
+  getProgress() {
+    return this.storage.get('progress', {});
+  },
+  recordAnswer(questionId, isCorrect, userAnswer) {
+    const progress = this.getProgress();
+    const today = this.formatDate(new Date());
+    if (!progress[questionId]) {
+      progress[questionId] = { attempts: 0, correct: 0, history: [] };
+    }
+    progress[questionId].attempts++;
+    if (isCorrect) progress[questionId].correct++;
+    progress[questionId].lastAnswer = userAnswer;
+    progress[questionId].lastResult = isCorrect;
+    progress[questionId].lastDate = today;
+    progress[questionId].history.push({ date: today, correct: isCorrect, answer: userAnswer });
+    if (progress[questionId].history.length > 50) progress[questionId].history.shift();
+    this.storage.set('progress', progress);
+    this.updateStreak(today);
+    this.updateDailyCount(today);
+  },
+
+  // ========== ストリーク管理 ==========
+  checkStreak() {
+    const streak = this.storage.get('streak', { current: 0, longest: 0, lastDate: null });
+    if (!streak.lastDate) return;
+    const last = new Date(streak.lastDate);
+    const today = new Date(this.formatDate(new Date()));
+    const diff = Math.floor((today - last) / (1000 * 60 * 60 * 24));
+    if (diff > 1) {
+      streak.current = 0;
+      this.storage.set('streak', streak);
+    }
+  },
+  updateStreak(today) {
+    const streak = this.storage.get('streak', { current: 0, longest: 0, lastDate: null });
+    if (streak.lastDate === today) return;
+    if (!streak.lastDate) {
+      streak.current = 1;
+    } else {
+      const last = new Date(streak.lastDate);
+      const todayDate = new Date(today);
+      const diff = Math.floor((todayDate - last) / (1000 * 60 * 60 * 24));
+      streak.current = (diff === 1) ? streak.current + 1 : 1;
+    }
+    streak.longest = Math.max(streak.longest, streak.current);
+    streak.lastDate = today;
+    this.storage.set('streak', streak);
+  },
+  updateDailyCount(today) {
+    const daily = this.storage.get('daily', {});
+    daily[today] = (daily[today] || 0) + 1;
+    this.storage.set('daily', daily);
+  },
+
+  // ========== ブックマーク ==========
+  getBookmarks() { return this.storage.get('bookmarks', []); },
+  toggleBookmark(qId) {
+    const bookmarks = this.getBookmarks();
+    const idx = bookmarks.indexOf(qId);
+    if (idx >= 0) bookmarks.splice(idx, 1);
+    else bookmarks.push(qId);
+    this.storage.set('bookmarks', bookmarks);
+    return idx < 0;
+  },
+  isBookmarked(qId) { return this.getBookmarks().includes(qId); },
+
+  // ========== 試験履歴 ==========
+  getExamHistory() { return this.storage.get('exams', []); },
+  saveExamResult(result) {
+    const history = this.getExamHistory();
+    history.unshift(result);
+    if (history.length > 20) history.pop();
+    this.storage.set('exams', history);
+  },
+
+  // ========== ユーティリティ ==========
+  formatDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  },
+  shuffleArray(arr) {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  },
+  vibrate(pattern) {
+    if (navigator.vibrate) navigator.vibrate(pattern);
+  },
+
+  // ========== 苦手分野分析 ==========
+  getWeaknesses(topN = 3) {
+    const progress = this.getProgress();
+    const sectionStats = {};
+    this.state.questions.forEach(q => {
+      const p = progress[q.id];
+      if (!p || p.attempts === 0) return;
+      const key = `${q.unit}-${q.section}`;
+      if (!sectionStats[key]) {
+        sectionStats[key] = { unit: q.unit, section: q.section, attempts: 0, correct: 0 };
+      }
+      sectionStats[key].attempts += p.attempts;
+      sectionStats[key].correct += p.correct;
+    });
+    return Object.values(sectionStats)
+      .filter(s => s.attempts >= 2)
+      .map(s => ({ ...s, rate: Math.round(s.correct / s.attempts * 100) }))
+      .sort((a, b) => a.rate - b.rate)
+      .slice(0, topN);
+  },
+
+  getWeakQuestions(count = 10) {
+    const progress = this.getProgress();
+    const scored = this.state.questions.map(q => {
+      const p = progress[q.id];
+      if (!p || p.attempts === 0) return { q, score: 0.5 };
+      return { q, score: p.correct / p.attempts };
+    });
+    return scored.sort((a, b) => a.score - b.score).slice(0, count).map(x => x.q);
+  },
+
+  // ========== ナビゲーション ==========
+  bindEvents() {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => this.navigate(btn.dataset.tab));
+    });
+    document.getElementById('back-btn').addEventListener('click', () => this.goBack());
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      this.state.settings.darkMode = !this.state.settings.darkMode;
+      this.saveSettings();
+      this.applyTheme();
+    });
+    document.getElementById('settings-btn').addEventListener('click', () => this.showSettings());
+    document.getElementById('modal-close').addEventListener('click', () => {
+      document.getElementById('modal').classList.add('hidden');
+    });
+  },
+
+  navigate(screen, params = {}) {
+    this.state.currentScreen = screen;
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === screen);
+    });
+    const isMain = ['home','practice','exam','review','stats'].includes(screen);
+    document.getElementById('back-btn').classList.toggle('hidden', isMain);
+    document.getElementById('tab-nav').style.display = isMain ? 'flex' : 'none';
+    
+    const renderers = {
+      home: () => this.renderHome(),
+      practice: () => this.renderPractice(),
+      exam: () => this.renderExamIntro(),
+      review: () => this.renderReview(),
+      stats: () => this.renderStats(),
+      'practice-setup': () => this.renderPracticeSetup(params),
+      'question': () => this.renderQuestion(),
+      'exam-active': () => this.renderExamActive(),
+      'exam-result': () => this.renderExamResult(params),
+      'session-complete': () => this.renderSessionComplete(),
+      'search': () => this.renderSearch()
+    };
+    if (renderers[screen]) renderers[screen]();
+    window.scrollTo(0, 0);
+  },
+
+  goBack() {
+    const flow = {
+      'practice-setup': 'practice',
+      'question': this.state.currentSession?.from || 'practice',
+      'exam-active': 'exam',
+      'exam-result': 'exam',
+      'session-complete': 'home',
+      'search': 'home'
+    };
+    this.navigate(flow[this.state.currentScreen] || 'home');
+  },
+
+  setTitle(t) { document.getElementById('page-title').textContent = t; },
+
+  // ========== ホーム画面 ==========
+  renderHome() {
+    this.setTitle('CAMS');
+    const progress = this.getProgress();
+    const totalQ = this.state.questions.length;
+    const answered = Object.keys(progress).length;
+    const percent = Math.round(answered / totalQ * 100);
+    
+    const streak = this.storage.get('streak', { current: 0, longest: 0 });
+    const today = this.formatDate(new Date());
+    const daily = this.storage.get('daily', {});
+    const todayCount = daily[today] || 0;
+    const goal = this.state.settings.dailyGoal;
+    
+    const lastQ = this.storage.get('lastQuestion', null);
+    const hour = new Date().getHours();
+    const greeting = hour < 6 ? 'こんばんは' : hour < 11 ? 'おはようございます' : hour < 17 ? 'こんにちは' : hour < 22 ? 'こんばんは' : 'お疲れ様です';
+    const greetEmoji = hour < 11 ? '☀️' : hour < 17 ? '🌤' : hour < 22 ? '🌙' : '🌃';
+    
+    const weak = this.getWeaknesses(3);
+
+    let html = `
+      <div class="greeting">
+        <div class="greeting-emoji">${greetEmoji}</div>
+        <h2>${greeting}</h2>
+        <p>今日も学習頑張りましょう！</p>
+      </div>
+    `;
+
+    if (lastQ) {
+      html += `
+        <div class="continue-card" id="continue-card">
+          <div class="label">📚 続きから</div>
+          <div class="title">${lastQ.unit} #${lastQ.no} まで完了</div>
+          <div class="meta">タップで再開 →</div>
+        </div>
+      `;
+    }
+
+    html += `
+      <div class="stat-card">
+        <div class="label">📈 全体進捗</div>
+        <div class="progress-row">
+          <span class="value">${answered} / ${totalQ}問</span>
+          <span class="num">${percent}%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div>
+      </div>
+    `;
+
+    if (streak.current > 0) {
+      html += `
+        <div class="streak-card">
+          <span class="streak-emoji">🔥</span>
+          <div class="streak-info">
+            <div class="label">連続学習</div>
+            <div class="num">${streak.current}日目</div>
+          </div>
+        </div>
+      `;
+    }
+
+    const goalPct = Math.min(100, Math.round(todayCount / goal * 100));
+    html += `
+      <div class="stat-card">
+        <div class="label">🎯 今日の目標</div>
+        <div class="progress-row">
+          <span class="value">${todayCount} / ${goal}問</span>
+          <span class="num">${goalPct}%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${goalPct}%"></div></div>
+      </div>
+    `;
+
+    html += `
+      <div class="quick-actions">
+        <button class="quick-btn" data-action="practice">
+          <div class="quick-btn-icon">📝</div>
+          <div class="quick-btn-label">演習</div>
+        </button>
+        <button class="quick-btn" data-action="exam">
+          <div class="quick-btn-icon">🎯</div>
+          <div class="quick-btn-label">試験</div>
+        </button>
+        <button class="quick-btn" data-action="weak">
+          <div class="quick-btn-icon">💪</div>
+          <div class="quick-btn-label">弱点</div>
+        </button>
+        <button class="quick-btn" data-action="search">
+          <div class="quick-btn-icon">🔍</div>
+          <div class="quick-btn-label">検索</div>
+        </button>
+      </div>
+    `;
+
+    if (weak.length > 0) {
+      html += `<div class="section-title">💡 苦手分野 TOP${weak.length}</div>`;
+      weak.forEach(w => {
+        html += `
+          <div class="weakness-card" data-section="${w.unit}-${w.section}">
+            <div class="info">
+              <div class="name">${w.section}</div>
+              <div class="meta">${w.unit} ・ ${w.attempts}回挑戦</div>
+            </div>
+            <div class="rate">${w.rate}%</div>
+          </div>
+        `;
+      });
+    }
+
+    document.getElementById('content').innerHTML = html;
+    
+    document.getElementById('continue-card')?.addEventListener('click', () => {
+      const q = this.state.questions.find(x => x.id === lastQ.id);
+      if (q) {
+        const idx = this.state.questions.findIndex(x => x.id === lastQ.id);
+        const remaining = this.state.questions.filter(x => x.unit === lastQ.unit && x.no >= lastQ.no + 1);
+        if (remaining.length > 0) {
+          this.startSession(remaining, `${lastQ.unit} 続きから`);
+        }
+      }
+    });
+    
+    document.querySelectorAll('.quick-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        if (action === 'weak') this.startWeakSession();
+        else if (action === 'search') this.navigate('search');
+        else this.navigate(action);
+      });
+    });
+    
+    document.querySelectorAll('.weakness-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const [unit, section] = card.dataset.section.split('-');
+        const qs = this.state.questions.filter(q => q.unit === unit && q.section === section);
+        this.startSession(this.shuffleArray(qs), `${section}`);
+      });
+    });
+  },
+
+  // ========== 演習画面 ==========
+  renderPractice() {
+    this.setTitle('問題演習');
+    const progress = this.getProgress();
+    
+    const unitStats = {};
+    ['U1','U2','U3','U4'].forEach(u => {
+      const qs = this.state.questions.filter(q => q.unit === u);
+      const answered = qs.filter(q => progress[q.id]).length;
+      unitStats[u] = { total: qs.length, answered, pct: Math.round(answered / qs.length * 100) };
+    });
+
+    let html = `
+      <div class="mode-card" id="unit-mode">
+        <div class="mode-header">
+          <span class="mode-icon">📚</span>
+          <div class="mode-info">
+            <div class="title">ユニット別学習</div>
+            <div class="desc">順番通りに解いていく</div>
+          </div>
+        </div>
+        <div class="unit-list">
+          ${['U1','U2','U3','U4'].map(u => {
+            const s = unitStats[u];
+            const titles = {
+              U1: '金融犯罪のリスクと手法',
+              U2: 'グローバルAFCの枠組み',
+              U3: 'AFCコンプライアンス態勢',
+              U4: 'ツール・テクノロジー'
+            };
+            return `
+              <div class="unit-row" data-unit="${u}">
+                <span class="unit-name">${u}</span>
+                <div class="unit-progress">
+                  <div style="font-size:13px;font-weight:600;margin-bottom:2px;">${titles[u]}</div>
+                  <div class="progress-bar"><div class="progress-fill" style="width:${s.pct}%"></div></div>
+                </div>
+                <span class="unit-rate ${s.pct === 100 ? 'complete' : ''}">${s.answered}/${s.total}</span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+
+      <div class="mode-card" id="random-mode">
+        <div class="mode-header">
+          <span class="mode-icon">🎲</span>
+          <div class="mode-info">
+            <div class="title">ランダム出題</div>
+            <div class="desc">フィルター付きシャッフル</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mode-card" id="weak-mode">
+        <div class="mode-header">
+          <span class="mode-icon">💪</span>
+          <div class="mode-info">
+            <div class="title">弱点克服モード</div>
+            <div class="desc">AIが苦手分野を自動選定 → 10問</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mode-card" id="bookmark-mode">
+        <div class="mode-header">
+          <span class="mode-icon">🔖</span>
+          <div class="mode-info">
+            <div class="title">ブックマーク</div>
+            <div class="desc">${this.getBookmarks().length}問が保存中</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('content').innerHTML = html;
+
+    document.querySelectorAll('.unit-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const unit = row.dataset.unit;
+        const qs = this.state.questions.filter(q => q.unit === unit);
+        this.startSession(qs, `${unit} 順番通り`, { from: 'practice' });
+      });
+    });
+
+    document.getElementById('random-mode').addEventListener('click', () => {
+      this.navigate('practice-setup', { mode: 'random' });
+    });
+
+    document.getElementById('weak-mode').addEventListener('click', () => this.startWeakSession());
+
+    document.getElementById('bookmark-mode').addEventListener('click', () => {
+      const bookmarks = this.getBookmarks();
+      if (bookmarks.length === 0) {
+        alert('ブックマークがまだありません。\n問題画面で🔖ボタンをタップして追加してください。');
+        return;
+      }
+      const qs = this.state.questions.filter(q => bookmarks.includes(q.id));
+      this.startSession(this.shuffleArray(qs), 'ブックマーク', { from: 'practice' });
+    });
+  },
+
+  // ========== ランダム出題セットアップ ==========
+  renderPracticeSetup(params) {
+    this.setTitle('ランダム出題');
+    const setup = this.storage.get('lastFilter', {
+      units: ['U1','U2','U3','U4'],
+      levels: ['Lv.1','Lv.2','Lv.3'],
+      filter: 'all',
+      count: 10
+    });
+
+    const html = `
+      <div class="mode-card">
+        <div class="filter-section">
+          <div class="filter-label">ユニット</div>
+          <div class="chip-group" id="filter-units">
+            ${['U1','U2','U3','U4'].map(u => 
+              `<button class="chip ${setup.units.includes(u)?'active':''}" data-val="${u}">${u}</button>`
+            ).join('')}
+          </div>
+        </div>
+        <div class="filter-section">
+          <div class="filter-label">難易度</div>
+          <div class="chip-group" id="filter-levels">
+            ${['Lv.1','Lv.2','Lv.3'].map(l => 
+              `<button class="chip ${setup.levels.includes(l)?'active':''}" data-val="${l}">${l}</button>`
+            ).join('')}
+          </div>
+        </div>
+        <div class="filter-section">
+          <div class="filter-label">対象</div>
+          <div class="chip-group" id="filter-target">
+            <button class="chip ${setup.filter==='all'?'active':''}" data-val="all">すべて</button>
+            <button class="chip ${setup.filter==='unanswered'?'active':''}" data-val="unanswered">未解答のみ</button>
+            <button class="chip ${setup.filter==='wrong'?'active':''}" data-val="wrong">誤答のみ</button>
+          </div>
+        </div>
+        <div class="count-row">
+          <div class="filter-label" style="margin:0;">出題数</div>
+          <div class="count-input">
+            <button class="count-btn" id="count-minus">−</button>
+            <span class="count-display" id="count-display">${setup.count}</span>
+            <button class="count-btn" id="count-plus">+</button>
+          </div>
+        </div>
+        <div id="match-info" style="text-align:center;color:var(--text-secondary);font-size:13px;margin-top:12px;"></div>
+      </div>
+      <button class="btn-primary" id="start-random">開始する</button>
+    `;
+    document.getElementById('content').innerHTML = html;
+
+    const updateMatch = () => {
+      const units = Array.from(document.querySelectorAll('#filter-units .chip.active')).map(c => c.dataset.val);
+      const levels = Array.from(document.querySelectorAll('#filter-levels .chip.active')).map(c => c.dataset.val);
+      const filter = document.querySelector('#filter-target .chip.active').dataset.val;
+      const progress = this.getProgress();
+      
+      let matched = this.state.questions.filter(q => 
+        units.includes(q.unit) && levels.includes(q.level)
+      );
+      if (filter === 'unanswered') matched = matched.filter(q => !progress[q.id]);
+      if (filter === 'wrong') matched = matched.filter(q => progress[q.id] && !progress[q.id].lastResult);
+      
+      document.getElementById('match-info').textContent = `該当: ${matched.length}問`;
+      return matched;
+    };
+
+    ['filter-units','filter-levels','filter-target'].forEach(id => {
+      document.getElementById(id).addEventListener('click', e => {
+        if (!e.target.classList.contains('chip')) return;
+        if (id === 'filter-target') {
+          document.querySelectorAll(`#${id} .chip`).forEach(c => c.classList.remove('active'));
+          e.target.classList.add('active');
+        } else {
+          e.target.classList.toggle('active');
+          const active = document.querySelectorAll(`#${id} .chip.active`);
+          if (active.length === 0) e.target.classList.add('active');
+        }
+        updateMatch();
+      });
+    });
+
+    let count = setup.count;
+    const countDisp = document.getElementById('count-display');
+    document.getElementById('count-minus').addEventListener('click', () => {
+      count = Math.max(5, count - 5);
+      countDisp.textContent = count;
+    });
+    document.getElementById('count-plus').addEventListener('click', () => {
+      count = Math.min(120, count + 5);
+      countDisp.textContent = count;
+    });
+
+    updateMatch();
+
+    document.getElementById('start-random').addEventListener('click', () => {
+      const matched = updateMatch();
+      if (matched.length === 0) { alert('該当する問題がありません'); return; }
+      
+      const units = Array.from(document.querySelectorAll('#filter-units .chip.active')).map(c => c.dataset.val);
+      const levels = Array.from(document.querySelectorAll('#filter-levels .chip.active')).map(c => c.dataset.val);
+      const filter = document.querySelector('#filter-target .chip.active').dataset.val;
+      this.storage.set('lastFilter', { units, levels, filter, count });
+      
+      const selected = this.shuffleArray(matched).slice(0, count);
+      this.startSession(selected, 'ランダム出題', { from: 'practice-setup' });
+    });
+  },
+
+  startWeakSession() {
+    const weak = this.getWeakQuestions(10);
+    if (weak.length === 0) { alert('まずはいくつか問題を解いてください'); return; }
+    this.startSession(weak, '弱点克服', { from: 'practice' });
+  },
+
+  // ========== セッション管理 ==========
+  startSession(questions, title, opts = {}) {
+    this.state.currentSession = {
+      questions, title, index: 0,
+      results: [],
+      from: opts.from || 'practice'
+    };
+    this.navigate('question');
+  },
+
+  // ========== 問題画面 ==========
+  renderQuestion() {
+    const session = this.state.currentSession;
+    if (!session) { this.navigate('home'); return; }
+    if (session.index >= session.questions.length) {
+      this.navigate('session-complete');
+      return;
+    }
+
+    const q = session.questions[session.index];
+    this.state.currentQuestion = q;
+    this.setTitle(`${session.title} ${session.index + 1}/${session.questions.length}`);
+
+    const isBookmarked = this.isBookmarked(q.id);
+    const lvClass = q.level === 'Lv.1' ? 'lv1' : q.level === 'Lv.2' ? 'lv2' : 'lv3';
+    const progress = ((session.index) / session.questions.length) * 100;
+
+    let html = `
+      <div class="question-progress"><div class="fill" style="width:${progress}%"></div></div>
+      
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div class="q-meta">
+          <span class="tag ${lvClass}">${q.level}</span>
+          <span class="tag type">${q.type}</span>
+        </div>
+        <button class="icon-btn" id="bookmark-btn">${isBookmarked ? '🔖' : '📑'}</button>
+      </div>
+      
+      <div class="q-page">${q.unit} #${q.no} ・ p.${q.page} ・ ${q.section}</div>
+
+      <div class="question-card">${this.escapeHtml(q.question)}</div>
+
+      <div class="choices" id="choices">
+        ${['A','B','C','D'].map(letter => `
+          <button class="choice" data-letter="${letter}">
+            <span class="choice-letter">${letter}</span>
+            <span class="choice-text">${this.escapeHtml(q.choices[letter])}</span>
+          </button>
+        `).join('')}
+      </div>
+
+      <div class="answer-actions">
+        <button class="btn-primary" id="submit-btn" disabled>解答する</button>
+      </div>
+    `;
+    document.getElementById('content').innerHTML = html;
+
+    let selected = null;
+    document.querySelectorAll('.choice').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.choice').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selected = btn.dataset.letter;
+        document.getElementById('submit-btn').disabled = false;
+        this.vibrate(10);
+      });
+    });
+
+    document.getElementById('submit-btn').addEventListener('click', () => {
+      if (!selected) return;
+      this.showAnswer(q, selected);
+    });
+
+    document.getElementById('bookmark-btn').addEventListener('click', () => {
+      const added = this.toggleBookmark(q.id);
+      document.getElementById('bookmark-btn').textContent = added ? '🔖' : '📑';
+      this.vibrate(15);
+    });
+
+    this.setupSwipe();
+  },
+
+  showAnswer(q, userAnswer) {
+    const isCorrect = userAnswer === q.answer;
+    this.recordAnswer(q.id, isCorrect, userAnswer);
+    this.storage.set('lastQuestion', { id: q.id, unit: q.unit, no: q.no });
+    
+    this.state.currentSession.results.push({ q, userAnswer, isCorrect });
+    this.vibrate(isCorrect ? [50] : [50, 50, 50]);
+
+    document.querySelectorAll('.choice').forEach(btn => {
+      btn.disabled = true;
+      btn.classList.remove('selected');
+      const letter = btn.dataset.letter;
+      if (letter === q.answer) btn.classList.add('correct');
+      else if (letter === userAnswer) btn.classList.add('incorrect');
+    });
+
+    const banner = `
+      <div class="result-banner ${isCorrect ? 'correct' : 'incorrect'}">
+        <div class="icon">${isCorrect ? '✅' : '❌'}</div>
+        <div class="label">${isCorrect ? '正解！' : '不正解'}</div>
+        ${!isCorrect ? `<div class="points">正解は ${q.answer} でした</div>` : ''}
+      </div>
+      <div class="explanation-card">
+        <div class="label">📖 解説</div>
+        <div class="text">${this.escapeHtml(q.explanation)}</div>
+      </div>
+      <div class="action-row">
+        <button class="btn-secondary" id="bookmark-after">🔖 復習</button>
+        <button class="btn-primary" id="next-btn">次の問題 →</button>
+      </div>
+    `;
+    
+    const actionsArea = document.querySelector('.answer-actions');
+    actionsArea.outerHTML = '';
+    document.getElementById('content').insertAdjacentHTML('beforeend', banner);
+    
+    document.getElementById('next-btn').addEventListener('click', () => {
+      this.state.currentSession.index++;
+      this.navigate('question');
+    });
+    
+    document.getElementById('bookmark-after').addEventListener('click', () => {
+      const added = this.toggleBookmark(q.id);
+      document.getElementById('bookmark-after').textContent = added ? '🔖 保存済' : '📑 復習';
+    });
+  },
+
+  setupSwipe() {
+    const content = document.getElementById('content');
+    let startX = 0, startY = 0;
+    content.addEventListener('touchstart', e => {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    }, { passive: true });
+    content.addEventListener('touchend', e => {
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      if (Math.abs(dx) > 80 && Math.abs(dy) < 50) {
+        if (dx < 0 && document.getElementById('next-btn')) {
+          document.getElementById('next-btn').click();
+        }
+      }
+    }, { passive: true });
+  },
+
+  // ========== セッション完了画面 ==========
+  renderSessionComplete() {
+    const session = this.state.currentSession;
+    this.setTitle('お疲れ様でした！');
+    const correct = session.results.filter(r => r.isCorrect).length;
+    const total = session.results.length;
+    const rate = Math.round(correct / total * 100);
+
+    const html = `
+      <div class="exam-result">
+        <div style="font-size:64px;">${rate >= 80 ? '🎉' : rate >= 60 ? '😊' : '💪'}</div>
+        <h2 style="font-size:28px;font-weight:700;margin:16px 0;">${session.title} 完了</h2>
+        
+        <div class="result-circle">
+          <svg width="200" height="200" viewBox="0 0 200 200">
+            <circle cx="100" cy="100" r="85" fill="none" stroke="var(--bg-secondary)" stroke-width="14"/>
+            <circle cx="100" cy="100" r="85" fill="none" stroke="${rate >= 75 ? 'var(--success)' : 'var(--warning)'}"
+              stroke-width="14" stroke-dasharray="${rate * 5.34} 534" stroke-linecap="round"/>
+          </svg>
+          <div class="score">
+            <div class="num">${rate}%</div>
+            <div class="label">正答率</div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:16px;justify-content:center;margin:16px 0;">
+          <div><div style="font-size:24px;font-weight:700;color:var(--success);">${correct}</div><div style="font-size:12px;color:var(--text-secondary);">正解</div></div>
+          <div><div style="font-size:24px;font-weight:700;color:var(--danger);">${total - correct}</div><div style="font-size:12px;color:var(--text-secondary);">不正解</div></div>
+        </div>
+
+        <button class="btn-primary" id="finish-session" style="margin-top:24px;">完了</button>
+      </div>
+    `;
+    document.getElementById('content').innerHTML = html;
+    document.getElementById('finish-session').addEventListener('click', () => this.navigate('home'));
+  },
+
+  // ========== 模擬試験 ==========
+  renderExamIntro() {
+    this.setTitle('模擬試験');
+    const history = this.getExamHistory();
+
+    let html = `
+      <div class="exam-intro">
+        <div style="font-size:48px;margin-bottom:8px;">🎯</div>
+        <h3>本番形式の模擬試験</h3>
+        <div class="exam-info">
+          <div class="exam-info-row"><span>出題数</span><strong>120問</strong></div>
+          <div class="exam-info-row"><span>制限時間</span><strong>3時間30分</strong></div>
+          <div class="exam-info-row"><span>出題範囲</span><strong>U1〜U4 全範囲</strong></div>
+          <div class="exam-info-row"><span>合格ライン</span><strong>75%</strong></div>
+        </div>
+        <button class="btn-primary" id="start-exam" style="background:white;color:var(--primary);">🚀 試験開始する</button>
+      </div>
+      <div class="exam-warning">⚠️ タイマーは停止しません。集中できる環境で開始してください。</div>
+    `;
+
+    if (history.length > 0) {
+      html += `<div class="section-title">📊 過去の試験結果</div>`;
+      history.slice(0, 5).forEach(r => {
+        const passed = r.score >= 75;
+        html += `
+          <div class="review-card">
+            <div class="badge" style="background:${passed?'var(--success-light)':'var(--danger-light)'};color:${passed?'var(--success)':'var(--danger)'};">
+              ${passed ? '合格' : '不合格'}
+            </div>
+            <div class="body">
+              <div class="title">${r.score}% (${r.correct}/${r.total}問)</div>
+              <div class="meta">${r.date} ・ 所要 ${r.duration}</div>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    document.getElementById('content').innerHTML = html;
+    document.getElementById('start-exam').addEventListener('click', () => this.startExam());
+  },
+
+  startExam() {
+    if (!confirm('模擬試験を開始します。よろしいですか？\n（タイマーは停止しません）')) return;
+    
+    const allQ = [...this.state.questions];
+    const u1 = this.shuffleArray(allQ.filter(q => q.unit === 'U1')).slice(0, 28);
+    const u2 = this.shuffleArray(allQ.filter(q => q.unit === 'U2')).slice(0, 22);
+    const u3 = this.shuffleArray(allQ.filter(q => q.unit === 'U3')).slice(0, 38);
+    const u4 = this.shuffleArray(allQ.filter(q => q.unit === 'U4')).slice(0, 32);
+    const examQ = this.shuffleArray([...u1, ...u2, ...u3, ...u4]);
+
+    this.state.examState = {
+      questions: examQ,
+      index: 0,
+      answers: {},
+      flagged: new Set(),
+      startTime: Date.now(),
+      duration: 3.5 * 60 * 60 * 1000
+    };
+    this.navigate('exam-active');
+  },
+
+  renderExamActive() {
+    const exam = this.state.examState;
+    if (!exam) { this.navigate('exam'); return; }
+    if (exam.index >= exam.questions.length) {
+      this.finishExam();
+      return;
+    }
+
+    const q = exam.questions[exam.index];
+    const progress = (exam.index + 1) / exam.questions.length * 100;
+    const isFlagged = exam.flagged.has(exam.index);
+    const userAns = exam.answers[exam.index];
+
+    this.setTitle(`試験 ${exam.index + 1}/120`);
+
+    let html = `
+      <div class="exam-timer">
+        <span style="font-size:13px;color:var(--text-secondary);">残り時間</span>
+        <span class="timer-display" id="timer">--:--:--</span>
+      </div>
+      <div class="question-progress"><div class="fill" style="width:${progress}%"></div></div>
+      
+      <div class="q-meta">
+        <span class="tag type">${q.unit} #${q.no}</span>
+        <span class="tag ${q.level==='Lv.1'?'lv1':q.level==='Lv.2'?'lv2':'lv3'}">${q.level}</span>
+      </div>
+      
+      <div class="question-card">${this.escapeHtml(q.question)}</div>
+
+      <div class="choices">
+        ${['A','B','C','D'].map(letter => `
+          <button class="choice ${userAns === letter ? 'selected' : ''}" data-letter="${letter}">
+            <span class="choice-letter">${letter}</span>
+            <span class="choice-text">${this.escapeHtml(q.choices[letter])}</span>
+          </button>
+        `).join('')}
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px;margin:16px 0;">
+        <button class="chip ${isFlagged?'active':''}" id="flag-btn">${isFlagged?'🚩 マーク済':'🚩 後で見直す'}</button>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        <button class="btn-secondary" id="prev-btn" style="flex:1;" ${exam.index === 0 ? 'disabled' : ''}>← 前</button>
+        <button class="btn-secondary" id="overview-btn" style="flex:1;">一覧</button>
+        <button class="btn-primary" id="next-btn" style="flex:1;">${exam.index === exam.questions.length - 1 ? '終了' : '次 →'}</button>
+      </div>
+    `;
+    document.getElementById('content').innerHTML = html;
+
+    document.querySelectorAll('.choice').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.choice').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        exam.answers[exam.index] = btn.dataset.letter;
+        this.vibrate(10);
+      });
+    });
+
+    document.getElementById('flag-btn').addEventListener('click', () => {
+      if (exam.flagged.has(exam.index)) exam.flagged.delete(exam.index);
+      else exam.flagged.add(exam.index);
+      this.renderExamActive();
+    });
+
+    document.getElementById('prev-btn').addEventListener('click', () => {
+      exam.index--;
+      this.renderExamActive();
+    });
+
+    document.getElementById('next-btn').addEventListener('click', () => {
+      if (exam.index === exam.questions.length - 1) {
+        if (confirm('試験を終了しますか？')) this.finishExam();
+      } else {
+        exam.index++;
+        this.renderExamActive();
+      }
+    });
+
+    document.getElementById('overview-btn').addEventListener('click', () => this.showExamOverview());
+
+    this.startExamTimer();
+  },
+
+  startExamTimer() {
+    if (this.examTimer) clearInterval(this.examTimer);
+    const update = () => {
+      const exam = this.state.examState;
+      if (!exam) return;
+      const elapsed = Date.now() - exam.startTime;
+      const remaining = Math.max(0, exam.duration - elapsed);
+      const h = Math.floor(remaining / 3600000);
+      const m = Math.floor((remaining % 3600000) / 60000);
+      const s = Math.floor((remaining % 60000) / 1000);
+      const display = document.getElementById('timer');
+      if (display) {
+        display.textContent = `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+        if (remaining < 600000) display.classList.add('warning');
+      }
+      if (remaining <= 0) {
+        clearInterval(this.examTimer);
+        alert('時間切れです。試験を終了します。');
+        this.finishExam();
+      }
+    };
+    update();
+    this.examTimer = setInterval(update, 1000);
+  },
+
+  showExamOverview() {
+    const exam = this.state.examState;
+    let html = '<h3 style="margin-bottom:16px;">問題一覧</h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px;">';
+    for (let i = 0; i < exam.questions.length; i++) {
+      const answered = exam.answers[i] !== undefined;
+      const flagged = exam.flagged.has(i);
+      const bg = flagged ? 'var(--warning)' : answered ? 'var(--success)' : 'var(--bg-secondary)';
+      const color = (flagged || answered) ? 'white' : 'var(--text)';
+      html += `<button class="overview-item" data-idx="${i}" style="padding:8px;background:${bg};color:${color};border:none;border-radius:6px;font-weight:600;cursor:pointer;">${i+1}</button>`;
+    }
+    html += '</div>';
+    html += `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">緑=回答済 / 黄=要見直し / 灰=未回答</div>`;
+
+    document.getElementById('modal-body').innerHTML = html;
+    document.getElementById('modal').classList.remove('hidden');
+    
+    document.querySelectorAll('.overview-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        exam.index = parseInt(btn.dataset.idx);
+        document.getElementById('modal').classList.add('hidden');
+        this.renderExamActive();
+      });
+    });
+  },
+
+  finishExam() {
+    if (this.examTimer) clearInterval(this.examTimer);
+    const exam = this.state.examState;
+    let correct = 0;
+    const unitStats = { U1: {c:0,t:0}, U2: {c:0,t:0}, U3: {c:0,t:0}, U4: {c:0,t:0} };
+    
+    exam.questions.forEach((q, i) => {
+      const ans = exam.answers[i];
+      const isCorrect = ans === q.answer;
+      if (isCorrect) correct++;
+      unitStats[q.unit].t++;
+      if (isCorrect) unitStats[q.unit].c++;
+      this.recordAnswer(q.id, isCorrect, ans);
+    });
+
+    const elapsed = Date.now() - exam.startTime;
+    const h = Math.floor(elapsed / 3600000);
+    const m = Math.floor((elapsed % 3600000) / 60000);
+    const result = {
+      date: this.formatDate(new Date()),
+      score: Math.round(correct / exam.questions.length * 100),
+      correct, total: exam.questions.length,
+      duration: `${h}:${String(m).padStart(2,'0')}`,
+      unitStats
+    };
+    this.saveExamResult(result);
+    this.navigate('exam-result', result);
+  },
+
+  renderExamResult(r) {
+    this.setTitle('試験結果');
+    const passed = r.score >= 75;
+    
+    const html = `
+      <div class="exam-result">
+        <div class="pass-banner ${passed?'':'fail'}">${passed?'🎉 合格！':'💪 もう一歩！'}</div>
+        <div class="result-circle">
+          <svg width="200" height="200" viewBox="0 0 200 200">
+            <circle cx="100" cy="100" r="85" fill="none" stroke="var(--bg-secondary)" stroke-width="14"/>
+            <circle cx="100" cy="100" r="85" fill="none" stroke="${passed?'var(--success)':'var(--warning)'}"
+              stroke-width="14" stroke-dasharray="${r.score * 5.34} 534" stroke-linecap="round"/>
+          </svg>
+          <div class="score">
+            <div class="num">${r.score}%</div>
+            <div class="label">${r.correct}/${r.total}問</div>
+          </div>
+        </div>
+        <div style="color:var(--text-secondary);margin-bottom:24px;">所要時間: ${r.duration}</div>
+
+        <div class="section-title text-center">ユニット別正答率</div>
+        ${['U1','U2','U3','U4'].map(u => {
+          const s = r.unitStats[u];
+          const pct = Math.round(s.c/s.t*100);
+          return `
+            <div class="unit-row">
+              <span class="unit-name">${u}</span>
+              <div class="unit-progress">
+                <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+              </div>
+              <span class="unit-rate ${pct>=75?'complete':''}">${s.c}/${s.t}</span>
+            </div>
+          `;
+        }).join('')}
+
+        <button class="btn-primary" style="margin-top:24px;" id="back-home">完了</button>
+      </div>
+    `;
+    document.getElementById('content').innerHTML = html;
+    document.getElementById('back-home').addEventListener('click', () => this.navigate('home'));
+  },
+
+  // ========== 復習画面 ==========
+  renderReview() {
+    this.setTitle('復習');
+    const progress = this.getProgress();
+    const bookmarks = this.getBookmarks();
+    
+    const wrong = this.state.questions.filter(q => 
+      progress[q.id] && progress[q.id].lastResult === false
+    );
+    const bookmarked = this.state.questions.filter(q => bookmarks.includes(q.id));
+    const repeatWrong = this.state.questions.filter(q => {
+      const p = progress[q.id];
+      if (!p || p.history.length < 2) return false;
+      const recent = p.history.slice(-3);
+      return recent.every(h => !h.correct);
+    });
+
+    const html = `
+      <div class="review-tabs">
+        <button class="stat-tab active" data-tab="wrong">誤答 ${wrong.length}</button>
+        <button class="stat-tab" data-tab="repeat">要復習 ${repeatWrong.length}</button>
+        <button class="stat-tab" data-tab="bookmark">🔖 ${bookmarks.length}</button>
+      </div>
+      <div id="review-content"></div>
+      ${wrong.length > 0 ? `<button class="btn-primary" id="quick-review" style="margin-top:16px;">🎲 ランダムに5問復習</button>` : ''}
+    `;
+    document.getElementById('content').innerHTML = html;
+
+    const renderList = (list, emptyMsg) => {
+      const c = document.getElementById('review-content');
+      if (list.length === 0) {
+        c.innerHTML = `<div class="empty-state"><div class="icon">📭</div><div class="text">${emptyMsg}</div></div>`;
+        return;
+      }
+      c.innerHTML = list.map(q => {
+        const p = progress[q.id] || {};
+        const lvClass = q.level === 'Lv.1' ? 'lv1' : q.level === 'Lv.2' ? 'lv2' : 'lv3';
+        return `
+          <div class="review-card" data-qid="${q.id}">
+            <span class="tag ${lvClass}">${q.level}</span>
+            <div class="body">
+              <div class="title">${this.escapeHtml(q.question.substring(0, 40))}...</div>
+              <div class="meta">${q.unit} #${q.no} ・ ${q.section}${p.attempts ? ` ・ ${p.correct}/${p.attempts}回正解` : ''}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      c.querySelectorAll('.review-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const qid = card.dataset.qid;
+          const q = this.state.questions.find(x => x.id === qid);
+          this.startSession([q], '復習', { from: 'review' });
+        });
+      });
+    };
+
+    renderList(wrong, '誤答した問題はまだありません');
+
+    document.querySelectorAll('.stat-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.stat-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const t = tab.dataset.tab;
+        if (t === 'wrong') renderList(wrong, '誤答した問題はまだありません');
+        else if (t === 'repeat') renderList(repeatWrong, '要復習の問題はまだありません');
+        else renderList(bookmarked, 'ブックマークはまだありません');
+      });
+    });
+
+    document.getElementById('quick-review')?.addEventListener('click', () => {
+      const sample = this.shuffleArray(wrong).slice(0, 5);
+      this.startSession(sample, '誤答復習', { from: 'review' });
+    });
+  },
+
+  // ========== 統計画面 ==========
+  renderStats() {
+    this.setTitle('学習統計');
+    const progress = this.getProgress();
+    const streak = this.storage.get('streak', { current: 0, longest: 0 });
+    const daily = this.storage.get('daily', {});
+    
+    let totalAttempts = 0, totalCorrect = 0;
+    Object.values(progress).forEach(p => {
+      totalAttempts += p.attempts;
+      totalCorrect += p.correct;
+    });
+    const overallRate = totalAttempts > 0 ? Math.round(totalCorrect / totalAttempts * 100) : 0;
+    
+    const unitStats = {};
+    ['U1','U2','U3','U4'].forEach(u => {
+      const qs = this.state.questions.filter(q => q.unit === u);
+      let attempts = 0, correct = 0, answered = 0;
+      qs.forEach(q => {
+        const p = progress[q.id];
+        if (p) {
+          answered++;
+          attempts += p.attempts;
+          correct += p.correct;
+        }
+      });
+      unitStats[u] = {
+        total: qs.length, answered,
+        rate: attempts > 0 ? Math.round(correct / attempts * 100) : 0
+      };
+    });
+    
+    const today = new Date();
+    const last7days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const key = this.formatDate(d);
+      last7days.push({ date: key, count: daily[key] || 0 });
+    }
+    const max7 = Math.max(1, ...last7days.map(d => d.count));
+
+    let html = `
+      <div class="chart-container text-center">
+        <div class="chart-title">全体正答率</div>
+        <div style="font-size:48px;font-weight:800;color:var(--primary);">${overallRate}%</div>
+        <div style="color:var(--text-secondary);font-size:13px;margin-top:4px;">${totalCorrect} / ${totalAttempts}回</div>
+      </div>
+
+      <div class="chart-container">
+        <div class="chart-title">📅 過去7日間の解答数</div>
+        <div style="display:flex;align-items:flex-end;gap:6px;height:120px;margin-top:12px;">
+          ${last7days.map(d => {
+            const h = Math.max(4, d.count / max7 * 100);
+            const dayLabel = ['日','月','火','水','木','金','土'][new Date(d.date).getDay()];
+            return `
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                <div style="font-size:10px;color:var(--text-secondary);">${d.count || ''}</div>
+                <div style="width:100%;height:${h}%;background:linear-gradient(180deg,var(--primary),var(--accent));border-radius:6px 6px 0 0;min-height:4px;"></div>
+                <div style="font-size:10px;color:var(--text-secondary);">${dayLabel}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+
+      <div class="chart-container">
+        <div class="chart-title">📚 ユニット別習熟度</div>
+        ${['U1','U2','U3','U4'].map(u => {
+          const s = unitStats[u];
+          return `
+            <div style="margin-top:12px;">
+              <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                <span style="font-weight:600;">${u}</span>
+                <span style="font-size:13px;"><span style="color:var(--text-secondary);">${s.answered}/${s.total}問</span> ・ <strong>${s.rate}%</strong></span>
+              </div>
+              <div class="progress-bar"><div class="progress-fill" style="width:${s.rate}%"></div></div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+        <div class="stat-card text-center">
+          <div class="label">🔥 現在の連続</div>
+          <div class="value" style="color:#F97316;">${streak.current}日</div>
+        </div>
+        <div class="stat-card text-center">
+          <div class="label">🏆 最長記録</div>
+          <div class="value" style="color:var(--warning);">${streak.longest}日</div>
+        </div>
+      </div>
+
+      <button class="btn-secondary" id="export-data" style="width:100%;margin-top:24px;">📤 学習データをエクスポート</button>
+    `;
+    document.getElementById('content').innerHTML = html;
+
+    document.getElementById('export-data').addEventListener('click', () => this.exportData());
+  },
+
+  exportData() {
+    const data = {
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      progress: this.getProgress(),
+      bookmarks: this.getBookmarks(),
+      streak: this.storage.get('streak'),
+      daily: this.storage.get('daily'),
+      exams: this.getExamHistory(),
+      settings: this.state.settings
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cams-backup-${this.formatDate(new Date())}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  // ========== 検索画面 ==========
+  renderSearch() {
+    this.setTitle('検索');
+    const html = `
+      <input type="search" class="search-input" id="search-input" placeholder="キーワードで検索（問題文・解説）..." autofocus>
+      <div id="search-results"></div>
+    `;
+    document.getElementById('content').innerHTML = html;
+
+    const input = document.getElementById('search-input');
+    const results = document.getElementById('search-results');
+
+    let timer;
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const q = input.value.trim().toLowerCase();
+        if (q.length < 2) {
+          results.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><div class="text">2文字以上で検索</div></div>';
+          return;
+        }
+        const matched = this.state.questions.filter(qu => 
+          qu.question.toLowerCase().includes(q) || 
+          qu.explanation.toLowerCase().includes(q) ||
+          qu.section.toLowerCase().includes(q) ||
+          qu.subsection.toLowerCase().includes(q)
+        ).slice(0, 30);
+        
+        if (matched.length === 0) {
+          results.innerHTML = '<div class="empty-state"><div class="icon">😕</div><div class="text">該当する問題が見つかりません</div></div>';
+          return;
+        }
+        
+        results.innerHTML = `
+          <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">${matched.length}件の結果</div>
+          ${matched.map(qu => {
+            const lvClass = qu.level === 'Lv.1' ? 'lv1' : qu.level === 'Lv.2' ? 'lv2' : 'lv3';
+            return `
+              <div class="review-card" data-qid="${qu.id}">
+                <span class="tag ${lvClass}">${qu.level}</span>
+                <div class="body">
+                  <div class="title">${this.escapeHtml(qu.question.substring(0, 50))}...</div>
+                  <div class="meta">${qu.unit} #${qu.no} ・ ${qu.section}</div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        `;
+        
+        results.querySelectorAll('.review-card').forEach(card => {
+          card.addEventListener('click', () => {
+            const qu = this.state.questions.find(x => x.id === card.dataset.qid);
+            this.startSession([qu], '検索結果', { from: 'search' });
+          });
+        });
+      }, 300);
+    });
+  },
+
+  // ========== 設定モーダル ==========
+  showSettings() {
+    const s = this.state.settings;
+    document.getElementById('modal-body').innerHTML = `
+      <h3 style="margin-bottom:16px;font-size:18px;">⚙️ 設定</h3>
+      <div class="setting-row">
+        <span class="label">🌙 ダークモード</span>
+        <div class="toggle ${s.darkMode?'on':''}" id="set-dark"></div>
+      </div>
+      <div class="setting-row">
+        <span class="label">🎯 1日の目標</span>
+        <div class="count-input">
+          <button class="count-btn" id="goal-minus">−</button>
+          <span class="count-display" id="goal-display">${s.dailyGoal}問</span>
+          <button class="count-btn" id="goal-plus">+</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <span class="label">📤 データエクスポート</span>
+        <button class="btn-secondary" id="set-export">📥 保存</button>
+      </div>
+      <div class="setting-row">
+        <span class="label" style="color:var(--danger);">🗑 全データ削除</span>
+        <button class="btn-secondary" id="set-reset" style="color:var(--danger);">削除</button>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);text-align:center;font-size:12px;color:var(--text-light);">
+        CAMS試験対策 PWA v1.0<br>
+        全${this.state.questions.length}問 / スタディガイド v7.03 完全網羅
+      </div>
+    `;
+    document.getElementById('modal').classList.remove('hidden');
+
+    document.getElementById('set-dark').addEventListener('click', () => {
+      this.state.settings.darkMode = !this.state.settings.darkMode;
+      this.saveSettings();
+      this.applyTheme();
+      document.getElementById('set-dark').classList.toggle('on');
+    });
+
+    let goal = s.dailyGoal;
+    document.getElementById('goal-minus').addEventListener('click', () => {
+      goal = Math.max(1, goal - 1);
+      document.getElementById('goal-display').textContent = goal + '問';
+      this.state.settings.dailyGoal = goal;
+      this.saveSettings();
+    });
+    document.getElementById('goal-plus').addEventListener('click', () => {
+      goal = Math.min(50, goal + 1);
+      document.getElementById('goal-display').textContent = goal + '問';
+      this.state.settings.dailyGoal = goal;
+      this.saveSettings();
+    });
+
+    document.getElementById('set-export').addEventListener('click', () => this.exportData());
+    
+    document.getElementById('set-reset').addEventListener('click', () => {
+      if (confirm('すべての学習データを削除しますか？\n（この操作は取り消せません）')) {
+        if (confirm('本当に削除しますか？\n進捗、誤答リスト、ブックマーク、試験履歴がすべて消えます。')) {
+          ['progress','bookmarks','streak','daily','exams','lastQuestion','lastFilter'].forEach(k => {
+            localStorage.removeItem(`cams.${k}`);
+          });
+          alert('削除しました');
+          location.reload();
+        }
+      }
+    });
+  },
+
+  escapeHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+  }
+};
+
+// 起動
+document.addEventListener('DOMContentLoaded', () => App.init());
