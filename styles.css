@@ -1485,3 +1485,126 @@ input:focus-visible {
     transition-duration: 0.001ms !important;
   }
 }
+
+
+/* v10: 忘却曲線・今日の学習 */
+.today-study-card {
+  margin: 16px 0;
+  padding: 18px;
+  border-radius: 24px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 12%, var(--card)), var(--card));
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+  box-shadow: 0 18px 42px rgba(29,78,216,0.12);
+}
+
+.today-study-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.today-study-head .label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+
+.today-study-head .title {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.today-study-head .desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.today-study-count {
+  min-width: 64px;
+  height: 64px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  background: var(--primary);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 900;
+  box-shadow: 0 12px 24px rgba(29,78,216,0.28);
+}
+
+.today-study-count span {
+  font-size: 11px;
+  font-weight: 800;
+  margin-left: 2px;
+}
+
+.review-pill-grid,
+.mode-metrics {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.review-pill,
+.mode-metrics span {
+  flex: 1;
+  min-width: 90px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--card) 78%, var(--bg-secondary));
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.review-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.review-pill strong {
+  font-size: 18px;
+  color: var(--text);
+}
+
+.today-study-btn {
+  margin-top: 14px;
+}
+
+.featured-mode {
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 10%, var(--card)), var(--card));
+}
+
+.mode-metrics span {
+  flex: 0 1 auto;
+  font-weight: 700;
+}
+
+.review-meta-line {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 420px) {
+  .today-study-card {
+    padding: 16px;
+    border-radius: 22px;
+  }
+  .today-study-count {
+    min-width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    font-size: 22px;
+  }
+}

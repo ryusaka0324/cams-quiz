@@ -89,6 +89,7 @@ const App = {
     progress[questionId].lastAnswer = userAnswer;
     progress[questionId].lastResult = isCorrect;
     progress[questionId].lastDate = today;
+    this.updateReviewSchedule(progress[questionId], isCorrect, today);
     progress[questionId].history.push({ date: today, correct: isCorrect, answer: userAnswer });
     if (progress[questionId].history.length > 50) progress[questionId].history.shift();
     this.storage.set('progress', progress);
@@ -154,6 +155,151 @@ const App = {
   formatDate(d) {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   },
+  parseDate(dateStr) {
+    if (!dateStr) return null;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  },
+  addDays(dateStr, days) {
+    const d = this.parseDate(dateStr) || new Date();
+    d.setDate(d.getDate() + days);
+    return this.formatDate(d);
+  },
+  daysBetween(fromDate, toDate) {
+    const from = this.parseDate(fromDate);
+    const to = this.parseDate(toDate);
+    if (!from || !to) return 0;
+    return Math.floor((to - from) / 86400000);
+  },
+
+  // ========== 忘却曲線・間隔反復 ==========
+  updateReviewSchedule(item, isCorrect, today) {
+    const intervals = [1, 3, 7, 14, 30, 60];
+    const currentLevel = Number.isFinite(item.reviewLevel) ? item.reviewLevel : 0;
+
+    if (isCorrect) {
+      item.reviewLevel = Math.min(currentLevel + 1, intervals.length);
+      item.intervalDays = intervals[item.reviewLevel - 1] || intervals[intervals.length - 1];
+    } else {
+      item.lapseCount = (item.lapseCount || 0) + 1;
+      item.reviewLevel = Math.max(0, currentLevel - 2);
+      item.intervalDays = 1;
+    }
+
+    item.nextReviewDate = this.addDays(today, item.intervalDays);
+  },
+  getReviewDueDate(progressItem, today) {
+    if (!progressItem || !progressItem.attempts) return null;
+    return progressItem.nextReviewDate || today;
+  },
+  getDueReviewQuestions(limit = Infinity) {
+    const progress = this.getProgress();
+    const today = this.formatDate(new Date());
+
+    return this.state.questions
+      .filter(q => {
+        const p = progress[q.id];
+        const dueDate = this.getReviewDueDate(p, today);
+        return dueDate && dueDate <= today;
+      })
+      .sort((a, b) => {
+        const pa = progress[a.id] || {};
+        const pb = progress[b.id] || {};
+        const da = this.getReviewDueDate(pa, today);
+        const db = this.getReviewDueDate(pb, today);
+        const overdueA = this.daysBetween(da, today);
+        const overdueB = this.daysBetween(db, today);
+        if (overdueB !== overdueA) return overdueB - overdueA;
+
+        const lapseA = pa.lapseCount || 0;
+        const lapseB = pb.lapseCount || 0;
+        if (lapseB !== lapseA) return lapseB - lapseA;
+
+        const rateA = pa.attempts ? pa.correct / pa.attempts : 1;
+        const rateB = pb.attempts ? pb.correct / pb.attempts : 1;
+        return rateA - rateB;
+      })
+      .slice(0, limit);
+  },
+  getReviewSummary() {
+    const progress = this.getProgress();
+    const today = this.formatDate(new Date());
+    let due = 0, overdue = 0, scheduled = 0;
+
+    this.state.questions.forEach(q => {
+      const p = progress[q.id];
+      if (!p || !p.attempts) return;
+      const dueDate = this.getReviewDueDate(p, today);
+      if (!dueDate) return;
+      if (dueDate <= today) {
+        due++;
+        if (dueDate < today) overdue++;
+      } else {
+        scheduled++;
+      }
+    });
+
+    return { due, overdue, scheduled };
+  },
+  getTodayLearningQuestions(limit = 20) {
+    const progress = this.getProgress();
+    const today = this.formatDate(new Date());
+    const selected = [];
+    const used = new Set();
+
+    const add = (list) => {
+      list.forEach(q => {
+        if (selected.length >= limit) return;
+        if (!q || used.has(q.id)) return;
+        used.add(q.id);
+        selected.push(q);
+      });
+    };
+
+    const due = this.getDueReviewQuestions(limit);
+    add(due);
+
+    const recentWrong = this.state.questions
+      .filter(q => {
+        const p = progress[q.id];
+        return p && p.lastResult === false && !used.has(q.id);
+      })
+      .sort((a, b) => (progress[b.id]?.lastDate || '').localeCompare(progress[a.id]?.lastDate || ''));
+    add(recentWrong);
+
+    const weak = this.state.questions
+      .filter(q => {
+        const p = progress[q.id];
+        return p && p.attempts >= 2 && !used.has(q.id);
+      })
+      .sort((a, b) => {
+        const pa = progress[a.id], pb = progress[b.id];
+        return (pa.correct / pa.attempts) - (pb.correct / pb.attempts);
+      });
+    add(weak);
+
+    const unseen = this.shuffleArray(this.state.questions.filter(q => !progress[q.id]));
+    add(unseen);
+
+    return selected;
+  },
+  startTodayLearningSession(from = 'home') {
+    const qs = this.getTodayLearningQuestions(20);
+    if (qs.length === 0) {
+      alert('今日の学習対象はまだありません。まずはユニット別演習かランダム出題で問題を解いてください。');
+      return;
+    }
+    this.startSession(qs, '今日の学習', { from });
+  },
+  startDueReviewSession(from = 'review') {
+    const qs = this.getDueReviewQuestions(20);
+    if (qs.length === 0) {
+      alert('今日が復習期限の問題はありません。');
+      return;
+    }
+    this.startSession(qs, '今日の復習', { from });
+  },
+
   shuffleArray(arr) {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -279,6 +425,8 @@ const App = {
     const greetEmoji = hour < 11 ? '☀️' : hour < 17 ? '🌤' : hour < 22 ? '🌙' : '🌃';
     
     const weak = this.getWeaknesses(3);
+    const reviewSummary = this.getReviewSummary();
+    const todayPlanCount = this.getTodayLearningQuestions(20).length;
 
     let html = `
       <div class="greeting">
@@ -299,6 +447,23 @@ const App = {
     }
 
     html += `
+      <div class="today-study-card">
+        <div class="today-study-head">
+          <div>
+            <div class="label">🧠 忘却曲線ベース</div>
+            <div class="title">今日の学習</div>
+            <div class="desc">復習期限・誤答・未解答を自動で組み合わせます</div>
+          </div>
+          <div class="today-study-count">${todayPlanCount}<span>問</span></div>
+        </div>
+        <div class="review-pill-grid">
+          <div class="review-pill"><span>期限切れ</span><strong>${reviewSummary.overdue}</strong></div>
+          <div class="review-pill"><span>今日の復習</span><strong>${reviewSummary.due}</strong></div>
+          <div class="review-pill"><span>予約済み</span><strong>${reviewSummary.scheduled}</strong></div>
+        </div>
+        <button class="btn-primary today-study-btn" id="today-study-btn">今日の学習を始める</button>
+      </div>
+
       <div class="stat-card">
         <div class="label">📈 全体進捗</div>
         <div class="progress-row">
@@ -382,6 +547,10 @@ const App = {
       }
     });
     
+    document.getElementById('today-study-btn')?.addEventListener('click', () => {
+      this.startTodayLearningSession('home');
+    });
+
     document.querySelectorAll('.quick-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.dataset.action;
@@ -412,7 +581,25 @@ const App = {
       unitStats[u] = { total: qs.length, answered, pct: Math.round(answered / qs.length * 100) };
     });
 
+    const reviewSummary = this.getReviewSummary();
+    const todayPlanCount = this.getTodayLearningQuestions(20).length;
+
     let html = `
+      <div class="mode-card featured-mode" id="today-learning-mode">
+        <div class="mode-header">
+          <span class="mode-icon">🧠</span>
+          <div class="mode-info">
+            <div class="title">今日の学習</div>
+            <div class="desc">忘却曲線ベースで ${todayPlanCount}問を自動出題</div>
+          </div>
+        </div>
+        <div class="mode-metrics">
+          <span>期限切れ ${reviewSummary.overdue}</span>
+          <span>復習 ${reviewSummary.due}</span>
+          <span>予約済み ${reviewSummary.scheduled}</span>
+        </div>
+      </div>
+
       <div class="mode-card" id="unit-mode">
         <div class="mode-header">
           <span class="mode-icon">📚</span>
@@ -483,6 +670,10 @@ const App = {
         const qs = this.state.questions.filter(q => q.unit === unit);
         this.startSession(qs, `${unit} 順番通り`, { from: 'practice' });
       });
+    });
+
+    document.getElementById('today-learning-mode').addEventListener('click', () => {
+      this.startTodayLearningSession('practice');
     });
 
     document.getElementById('random-mode').addEventListener('click', () => {
@@ -642,6 +833,10 @@ const App = {
     const isBookmarked = this.isBookmarked(q.id);
     const lvClass = q.level === 'Lv.1' ? 'lv1' : q.level === 'Lv.2' ? 'lv2' : 'lv3';
     const progress = ((session.index + 1) / session.questions.length) * 100;
+    const qProgress = this.getProgress()[q.id];
+    const reviewMeta = qProgress && qProgress.attempts
+      ? `過去 ${qProgress.correct}/${qProgress.attempts} 正解 ・ 記憶Lv.${qProgress.reviewLevel || 0}${qProgress.nextReviewDate ? ` ・ 次回 ${qProgress.nextReviewDate}` : ''}`
+      : '初回出題';
 
     let html = `
       <div class="question-progress"><div class="fill" style="width:${progress}%"></div></div>
@@ -654,7 +849,7 @@ const App = {
         <button class="icon-btn" id="bookmark-btn">${isBookmarked ? '🔖' : '📑'}</button>
       </div>
       
-      <div class="q-page">${q.unit} #${q.no} ・ p.${q.page} ・ ${q.section}<br><span class="see-textbook-link" id="see-textbook">📖 教科書のp.${q.page}を見る</span></div>
+      <div class="q-page">${q.unit} #${q.no} ・ p.${q.page} ・ ${q.section}<br><span class="review-meta-line">🧠 ${reviewMeta}</span><br><span class="see-textbook-link" id="see-textbook">📖 教科書のp.${q.page}を見る</span></div>
 
       <div class="question-card">${this.escapeHtml(q.question)}</div>
 
@@ -1086,6 +1281,7 @@ const App = {
       progress[q.id] && progress[q.id].lastResult === false
     );
     const bookmarked = this.state.questions.filter(q => bookmarks.includes(q.id));
+    const dueReview = this.getDueReviewQuestions(999);
     const repeatWrong = this.state.questions.filter(q => {
       const p = progress[q.id];
       if (!p || p.history.length < 2) return false;
@@ -1095,12 +1291,14 @@ const App = {
 
     const html = `
       <div class="review-tabs">
-        <button class="stat-tab active" data-tab="wrong">誤答 ${wrong.length}</button>
-        <button class="stat-tab" data-tab="repeat">要復習 ${repeatWrong.length}</button>
+        <button class="stat-tab active" data-tab="due">今日 ${dueReview.length}</button>
+        <button class="stat-tab" data-tab="wrong">誤答 ${wrong.length}</button>
+        <button class="stat-tab" data-tab="repeat">連続誤答 ${repeatWrong.length}</button>
         <button class="stat-tab" data-tab="bookmark">🔖 ${bookmarks.length}</button>
       </div>
       <div id="review-content"></div>
-      ${wrong.length > 0 ? `<button class="btn-primary" id="quick-review" style="margin-top:16px;">🎲 ランダムに5問復習</button>` : ''}
+      ${dueReview.length > 0 ? `<button class="btn-primary" id="due-review" style="margin-top:16px;">🧠 今日の復習を始める</button>` : ''}
+      ${wrong.length > 0 ? `<button class="btn-secondary" id="quick-review" style="margin-top:12px;width:100%;">🎲 誤答から5問復習</button>` : ''}
     `;
     document.getElementById('content').innerHTML = html;
 
@@ -1132,17 +1330,22 @@ const App = {
       });
     };
 
-    renderList(wrong, '誤答した問題はまだありません');
+    renderList(dueReview, '今日が復習期限の問題はありません');
 
     document.querySelectorAll('.stat-tab').forEach(tab => {
       tab.addEventListener('click', () => {
         document.querySelectorAll('.stat-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         const t = tab.dataset.tab;
-        if (t === 'wrong') renderList(wrong, '誤答した問題はまだありません');
-        else if (t === 'repeat') renderList(repeatWrong, '要復習の問題はまだありません');
+        if (t === 'due') renderList(dueReview, '今日が復習期限の問題はありません');
+        else if (t === 'wrong') renderList(wrong, '誤答した問題はまだありません');
+        else if (t === 'repeat') renderList(repeatWrong, '連続誤答の問題はまだありません');
         else renderList(bookmarked, 'ブックマークはまだありません');
       });
+    });
+
+    document.getElementById('due-review')?.addEventListener('click', () => {
+      this.startDueReviewSession('review');
     });
 
     document.getElementById('quick-review')?.addEventListener('click', () => {
