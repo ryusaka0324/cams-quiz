@@ -719,15 +719,15 @@ const App = {
     });
 
     const banner = `
-      <div class="result-feedback ${isCorrect ? 'correct' : 'incorrect'}">
-        <div class="result-feedback-icon">${isCorrect ? '✓' : '!'}</div>
-        <div>
-          <div class="result-feedback-title">${isCorrect ? '正解' : '不正解'}</div>
-          <div class="result-feedback-meta">正答：${q.answer} ／ あなたの解答：${userAnswer}</div>
-        </div>
-      </div>
       <div class="explanation-card">
-        <div class="label">📖 解説</div>
+        <div class="explanation-head">
+          <div class="label">📖 解説</div>
+          <div class="answer-summary ${isCorrect ? 'correct' : 'incorrect'}">
+            <span class="answer-summary-icon">${isCorrect ? '✓' : '×'}</span>
+            <span class="answer-summary-title">${isCorrect ? '正解' : '不正解'}</span>
+            <span class="answer-summary-meta">正答：${q.answer} ／ あなたの解答：${userAnswer}</span>
+          </div>
+        </div>
         <div class="text">${this.escapeHtml(q.explanation)}</div>
       </div>
       <div class="fixed-actions">

@@ -467,6 +467,75 @@ body.has-tab-nav {
   padding-bottom: var(--fixed-bar-space) !important;
 }
 
+
+/* 解説カード内のコンパクトな正誤表示 */
+.explanation-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.answer-summary {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.answer-summary.correct {
+  color: var(--success);
+  background: var(--success-light);
+}
+
+.answer-summary.incorrect {
+  color: var(--danger);
+  background: var(--danger-light);
+}
+
+.answer-summary-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.answer-summary.correct .answer-summary-icon {
+  background: var(--success);
+}
+
+.answer-summary.incorrect .answer-summary-icon {
+  background: var(--danger);
+}
+
+.answer-summary-meta {
+  font-weight: 700;
+  opacity: .8;
+}
+
+@media (max-width: 420px) {
+  .answer-summary {
+    width: 100%;
+    border-radius: 16px;
+    padding: 8px 10px;
+  }
+  .answer-summary-meta {
+    flex-basis: 100%;
+    padding-left: 24px;
+  }
+}
+
 .explanation-card {
   background: var(--card);
   padding: 20px;
