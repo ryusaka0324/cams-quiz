@@ -143,6 +143,91 @@ const App = {
   },
   isBookmarked(qId) { return this.getBookmarks().includes(qId); },
 
+  // ========== 演習セッションの途中保存 ==========
+  serializeSession(session) {
+    if (!session || !Array.isArray(session.questions)) return null;
+    return {
+      title: session.title,
+      index: session.index || 0,
+      from: session.from || 'practice',
+      savedAt: new Date().toISOString(),
+      questionIds: session.questions.map(q => q.id),
+      results: (session.results || []).map(r => ({
+        qid: r.q?.id || r.qid,
+        userAnswer: r.userAnswer,
+        isCorrect: r.isCorrect
+      }))
+    };
+  },
+  hydrateSession(saved) {
+    if (!saved || !Array.isArray(saved.questionIds)) return null;
+    const questions = saved.questionIds
+      .map(id => this.state.questions.find(q => q.id === id))
+      .filter(Boolean);
+    if (questions.length === 0) return null;
+
+    const safeIndex = Math.min(Math.max(saved.index || 0, 0), questions.length - 1);
+    const results = (saved.results || []).map(r => {
+      const q = this.state.questions.find(x => x.id === r.qid);
+      return q ? { q, userAnswer: r.userAnswer, isCorrect: r.isCorrect } : null;
+    }).filter(Boolean);
+
+    return {
+      questions,
+      title: saved.title || '保存中の演習',
+      index: safeIndex,
+      from: saved.from || 'practice',
+      results
+    };
+  },
+  saveActiveSession() {
+    const serialized = this.serializeSession(this.state.currentSession);
+    if (!serialized) return;
+    this.storage.set('activeSession', serialized);
+  },
+  getActiveSession() {
+    const saved = this.storage.get('activeSession', null);
+    const session = this.hydrateSession(saved);
+    if (!session) return null;
+    if (session.index >= session.questions.length) return null;
+    return session;
+  },
+  clearActiveSession() {
+    try { localStorage.removeItem('cams.activeSession'); }
+    catch (e) { console.warn('Failed to clear active session', e); }
+  },
+  resumeActiveSession() {
+    const session = this.getActiveSession();
+    if (!session) {
+      alert('再開できる演習はありません。');
+      return;
+    }
+    this.state.currentSession = session;
+    this.navigate('question');
+  },
+  describeActiveSession() {
+    const session = this.getActiveSession();
+    if (!session) return null;
+    const saved = this.storage.get('activeSession', {});
+    return {
+      title: session.title,
+      index: session.index + 1,
+      total: session.questions.length,
+      remaining: Math.max(0, session.questions.length - session.index),
+      savedAt: this.formatSavedAt(saved?.savedAt)
+    };
+  },
+  formatSavedAt(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${mm}/${dd} ${hh}:${mi}`;
+  },
+
   // ========== 試験履歴 ==========
   getExamHistory() { return this.storage.get('exams', []); },
   saveExamResult(result) {
@@ -429,6 +514,7 @@ const App = {
     const greetEmoji = hour < 11 ? '☀️' : hour < 17 ? '🌤' : hour < 22 ? '🌙' : '🌃';
     
     const weak = this.getWeaknesses(3);
+    const activeSession = this.describeActiveSession();
     const reviewSummary = this.getReviewSummary();
     const todayLearningCount = this.state.settings.todayLearningCount || 20;
     const todayPlanCount = this.getTodayLearningQuestions(todayLearningCount).length;
@@ -442,12 +528,25 @@ const App = {
       </div>
     `;
 
+    if (activeSession) {
+      html += `
+        <div class="resume-session-card" id="resume-session-card">
+          <div class="resume-session-main">
+            <div class="label">⏸ 保存中の演習</div>
+            <div class="title">${activeSession.title}</div>
+            <div class="meta">${activeSession.index}/${activeSession.total}問目 ・ 残り${activeSession.remaining}問${activeSession.savedAt ? ` ・ ${activeSession.savedAt}保存` : ''}</div>
+          </div>
+          <button class="resume-session-btn" id="resume-session-btn">再開</button>
+        </div>
+      `;
+    }
+
     if (lastQ) {
       html += `
         <div class="continue-card" id="continue-card">
-          <div class="label">📚 続きから</div>
+          <div class="label">📚 最後に解いた問題</div>
           <div class="title">${lastQ.unit} #${lastQ.no} まで完了</div>
-          <div class="meta">タップで再開 →</div>
+          <div class="meta">同じユニットの続きから再開 →</div>
         </div>
       `;
     }
@@ -548,6 +647,14 @@ const App = {
 
     document.getElementById('content').innerHTML = html;
     
+    document.getElementById('resume-session-card')?.addEventListener('click', () => {
+      this.resumeActiveSession();
+    });
+    document.getElementById('resume-session-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.resumeActiveSession();
+    });
+
     document.getElementById('continue-card')?.addEventListener('click', () => {
       const q = this.state.questions.find(x => x.id === lastQ.id);
       if (q) {
@@ -602,11 +709,23 @@ const App = {
     });
 
     const reviewSummary = this.getReviewSummary();
+    const activeSession = this.describeActiveSession();
     const todayLearningCount = this.state.settings.todayLearningCount || 20;
     const todayPlanCount = this.getTodayLearningQuestions(todayLearningCount).length;
     const countOptions = [5, 10, 20, 30, 50, 100];
 
     let html = `
+      ${activeSession ? `
+        <div class="resume-session-card compact" id="practice-resume-session-card">
+          <div class="resume-session-main">
+            <div class="label">⏸ 保存中の演習</div>
+            <div class="title">${activeSession.title}</div>
+            <div class="meta">${activeSession.index}/${activeSession.total}問目 ・ 残り${activeSession.remaining}問${activeSession.savedAt ? ` ・ ${activeSession.savedAt}保存` : ''}</div>
+          </div>
+          <button class="resume-session-btn" id="practice-resume-session-btn">再開</button>
+        </div>
+      ` : ''}
+
       <div class="mode-card featured-mode" id="today-learning-mode">
         <div class="mode-header">
           <span class="mode-icon">🧠</span>
@@ -691,6 +810,14 @@ const App = {
     `;
 
     document.getElementById('content').innerHTML = html;
+
+    document.getElementById('practice-resume-session-card')?.addEventListener('click', () => {
+      this.resumeActiveSession();
+    });
+    document.getElementById('practice-resume-session-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.resumeActiveSession();
+    });
 
     document.querySelectorAll('.unit-row').forEach(row => {
       row.addEventListener('click', () => {
@@ -851,6 +978,7 @@ const App = {
       results: [],
       from: opts.from || 'practice'
     };
+    this.saveActiveSession();
     this.navigate('question');
   },
 
@@ -859,9 +987,12 @@ const App = {
     const session = this.state.currentSession;
     if (!session) { this.navigate('home'); return; }
     if (session.index >= session.questions.length) {
+      this.clearActiveSession();
       this.navigate('session-complete');
       return;
     }
+
+    this.saveActiveSession();
 
     const q = session.questions[session.index];
     this.state.currentQuestion = q;
@@ -940,6 +1071,17 @@ const App = {
     this.storage.set('lastQuestion', { id: q.id, unit: q.unit, no: q.no });
     
     this.state.currentSession.results.push({ q, userAnswer, isCorrect });
+
+    // 閉じた場合は「解答済みの問題」ではなく「次の未解答問題」から再開する
+    const savedIndex = this.state.currentSession.index;
+    this.state.currentSession.index = Math.min(savedIndex + 1, this.state.currentSession.questions.length);
+    if (this.state.currentSession.index >= this.state.currentSession.questions.length) {
+      this.clearActiveSession();
+    } else {
+      this.saveActiveSession();
+    }
+    this.state.currentSession.index = savedIndex;
+
     this.vibrate(isCorrect ? [50] : [50, 50, 50]);
 
     document.querySelectorAll('.choice').forEach(btn => {
@@ -975,6 +1117,11 @@ const App = {
     
     document.getElementById('next-btn').addEventListener('click', () => {
       this.state.currentSession.index++;
+      if (this.state.currentSession.index >= this.state.currentSession.questions.length) {
+        this.clearActiveSession();
+      } else {
+        this.saveActiveSession();
+      }
       this.navigate('question');
     });
     
@@ -1004,6 +1151,7 @@ const App = {
 
   // ========== セッション完了画面 ==========
   renderSessionComplete() {
+    this.clearActiveSession();
     const session = this.state.currentSession;
     this.setTitle('お疲れ様でした！');
     const correct = session.results.filter(r => r.isCorrect).length;
@@ -1629,7 +1777,7 @@ const App = {
     document.getElementById('set-reset').addEventListener('click', () => {
       if (confirm('すべての学習データを削除しますか？\n（この操作は取り消せません）')) {
         if (confirm('本当に削除しますか？\n進捗、誤答リスト、ブックマーク、試験履歴がすべて消えます。')) {
-          ['progress','bookmarks','streak','daily','exams','lastQuestion','lastFilter'].forEach(k => {
+          ['progress','bookmarks','streak','daily','exams','lastQuestion','lastFilter','activeSession'].forEach(k => {
             localStorage.removeItem(`cams.${k}`);
           });
           alert('削除しました');
