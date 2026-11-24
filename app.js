@@ -13,7 +13,7 @@ const App = {
     currentSession: null,
     examState: null,
     textbookState: { unit: null, page: null },
-    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16, examDate: '2026-12-19', newCutoffDays: 7 }
+    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16, examDate: '2026-12-19', newCutoffDays: 7, goalMode: 'auto' }
   },
 
   // ========== 起動処理 ==========
@@ -241,12 +241,24 @@ const App = {
     });
     due.sort((a, b) => (a.st.due < b.st.due ? -1 : a.st.due > b.st.due ? 1 : a.st.box - b.st.box));
     const daysToExam = s.examDate ? this.daysBetween(today, s.examDate) : null;
-    const cutoff = s.examDate ? this.addDays(s.examDate, -(s.newCutoffDays || 7)) : null;
+    // 新規を一巡する期限：試験日の7日前（復習・模擬試験に充てる期間を確保）。
+    // ただし試験まで日数が少ないときは、確保する期間を残り日数の3割までに縮める。
+    // 試験日が未設定・経過済みなら14日で一巡するペースにする。
+    let cutoff = null;
+    if (daysToExam !== null && daysToExam > 0) {
+      const reserve = Math.min(s.newCutoffDays || 7, Math.floor(daysToExam * 0.3));
+      cutoff = this.addDays(s.examDate, -Math.max(1, reserve));
+      if (today > cutoff) cutoff = today;
+    }
     const newDaysLeft = cutoff ? Math.max(1, this.daysBetween(today, cutoff) + 1) : 14;
-    const quota = (cutoff && today > cutoff) ? unseen.length + newToday
-      : Math.ceil((unseen.length + newToday) / newDaysLeft);
+    const quota = Math.ceil((unseen.length + newToday) / newDaysLeft);
     const newRemaining = Math.max(0, Math.min(unseen.length, quota - newToday));
-    return { today, due: due.map(x => x.q), unseen, newRemaining, newToday, quota,
+    const daily = this.storage.get('daily', {});
+    const todayCount = daily[today] || 0;
+    // 今日の目標＝今日すでに解いた数＋期限が来た復習＋今日の新規の残り
+    const autoGoal = Math.max(1, todayCount + due.length + newRemaining);
+    const todayGoal = s.goalMode === 'manual' ? (s.dailyGoal || 10) : autoGoal;
+    return { today, due: due.map(x => x.q), unseen, newRemaining, newToday, quota, todayCount, autoGoal, todayGoal,
              mastered, learning, daysToExam, cutoff, total: this.state.questions.length };
   },
   startTodaySession() {
@@ -331,7 +343,9 @@ const App = {
     const today = this.formatDate(new Date());
     const daily = this.storage.get('daily', {});
     const todayCount = daily[today] || 0;
-    const goal = this.state.settings.dailyGoal;
+    const planForGoal = this.getStudyPlan();
+    const goal = planForGoal.todayGoal;
+    const goalIsAuto = this.state.settings.goalMode !== 'manual';
     
     const lastQ = this.storage.get('lastQuestion', null);
     const hour = new Date().getHours();
@@ -357,7 +371,7 @@ const App = {
     function s_md(d) { const [y, m, dd] = d.split('-'); return `${Number(m)}/${Number(dd)}`; }
     html += `
       <div class="stat-card srs-card">
-        <div class="label">📅 ${examLabel}</div>
+        <div class="label" id="exam-label" style="cursor:pointer;">📅 ${examLabel} <span style="color:var(--primary, #1e40af);">変更</span></div>
         <div class="srs-row">
           <div class="srs-num"><span>${plan.due.length}</span>復習</div>
           <div class="srs-num"><span>${plan.newRemaining}</span>新規</div>
@@ -368,7 +382,7 @@ const App = {
           <span class="num">${masteredPct}%</span>
         </div>
         <div class="progress-bar"><div class="progress-fill" style="width:${masteredPct}%"></div></div>
-        <div class="srs-meta">新規は1日${plan.quota}問ペース（${plan.cutoff ? s_md(plan.cutoff) : '-'}までに全問を一巡）</div>
+        <div class="srs-meta">新規は1日${plan.quota}問ペース（${plan.cutoff ? s_md(plan.cutoff) + 'までに全問を一巡' : '試験日未設定のため14日で一巡'}）${plan.quota > 40 ? '<br>⚠️ 新規だけで1日40問を超えています。試験日の見直しも検討してください' : ''}</div>
         <button class="btn-primary" id="today-btn" style="margin-top:12px;width:100%;" ${todayTotal === 0 ? 'disabled' : ''}>
           ${todayTotal === 0 ? '✅ 今日の分は完了' : `▶ 今日の学習を始める（残り${todayTotal}問・20問ずつ）`}
         </button>
@@ -411,7 +425,7 @@ const App = {
     const goalPct = Math.min(100, Math.round(todayCount / goal * 100));
     html += `
       <div class="stat-card">
-        <div class="label">🎯 今日の目標</div>
+        <div class="label">🎯 今日の目標${goalIsAuto ? '（試験日から自動計算）' : '（手動）'}</div>
         <div class="progress-row">
           <span class="value">${todayCount} / ${goal}問</span>
           <span class="num">${goalPct}%</span>
@@ -459,6 +473,7 @@ const App = {
     document.getElementById('content').innerHTML = html;
     
     document.getElementById('today-btn')?.addEventListener('click', () => this.startTodaySession());
+    document.getElementById('exam-label')?.addEventListener('click', () => this.showSettings());
 
     document.getElementById('continue-card')?.addEventListener('click', () => {
       const q = this.state.questions.find(x => x.id === lastQ.id);
@@ -1422,16 +1437,21 @@ const App = {
         <div class="toggle ${s.darkMode?'on':''}" id="set-dark"></div>
       </div>
       <div class="setting-row">
-        <span class="label">🎯 1日の目標</span>
+        <span class="label">📅 試験日</span>
+        <input type="date" id="set-exam" value="${s.examDate || ''}" min="${this.formatDate(new Date())}" style="font-size:15px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg, #fff);color:inherit;">
+      </div>
+      <div id="plan-preview" style="font-size:12px;color:var(--text-secondary);margin:-4px 0 8px;"></div>
+      <div class="setting-row">
+        <span class="label">🎯 今日の目標を自動計算</span>
+        <div class="toggle ${s.goalMode !== 'manual' ? 'on' : ''}" id="set-goal-auto"></div>
+      </div>
+      <div class="setting-row" id="goal-manual-row" style="${s.goalMode === 'manual' ? '' : 'display:none;'}">
+        <span class="label">🎯 1日の目標（手動）</span>
         <div class="count-input">
           <button class="count-btn" id="goal-minus">−</button>
           <span class="count-display" id="goal-display">${s.dailyGoal}問</span>
           <button class="count-btn" id="goal-plus">+</button>
         </div>
-      </div>
-      <div class="setting-row">
-        <span class="label">📅 試験日</span>
-        <input type="date" id="set-exam" value="${s.examDate || ''}" style="font-size:15px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg, #fff);color:inherit;">
       </div>
       <div class="setting-row">
         <span class="label">📤 データエクスポート</span>
@@ -1455,24 +1475,45 @@ const App = {
       document.getElementById('set-dark').classList.toggle('on');
     });
 
+    const refreshPreview = () => {
+      const p = this.getStudyPlan();
+      const md = d => { const [y, m, dd] = d.split('-'); return `${Number(m)}/${Number(dd)}`; };
+      document.getElementById('plan-preview').textContent = p.daysToExam > 0
+        ? `→ 試験まで${p.daysToExam}日・新規は1日${p.quota}問（${md(p.cutoff)}までに一巡）・今日の目標${p.autoGoal}問`
+        : '→ 試験日を設定すると、新規のペースと今日の目標を自動で計算します';
+      if (this.state.currentScreen === 'home') this.renderHome();
+    };
+    refreshPreview();
+
+    document.getElementById('set-goal-auto').addEventListener('click', () => {
+      const auto = this.state.settings.goalMode === 'manual';
+      this.state.settings.goalMode = auto ? 'auto' : 'manual';
+      this.saveSettings();
+      document.getElementById('set-goal-auto').classList.toggle('on', auto);
+      document.getElementById('goal-manual-row').style.display = auto ? 'none' : '';
+      refreshPreview();
+    });
+
     let goal = s.dailyGoal;
     document.getElementById('goal-minus').addEventListener('click', () => {
       goal = Math.max(1, goal - 1);
       document.getElementById('goal-display').textContent = goal + '問';
       this.state.settings.dailyGoal = goal;
       this.saveSettings();
+      refreshPreview();
     });
     document.getElementById('goal-plus').addEventListener('click', () => {
-      goal = Math.min(50, goal + 1);
+      goal = Math.min(200, goal + 1);
       document.getElementById('goal-display').textContent = goal + '問';
       this.state.settings.dailyGoal = goal;
       this.saveSettings();
+      refreshPreview();
     });
 
     document.getElementById('set-exam').addEventListener('change', (e) => {
       this.state.settings.examDate = e.target.value || null;
       this.saveSettings();
-      if (this.state.currentScreen === 'home') this.renderHome();
+      refreshPreview();
     });
 
     document.getElementById('set-export').addEventListener('click', () => this.exportData());
