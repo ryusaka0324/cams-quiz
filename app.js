@@ -13,7 +13,7 @@ const App = {
     currentSession: null,
     examState: null,
     textbookState: { unit: null, page: null },
-    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16, todayLearningCount: 20 }
+    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16 }
   },
 
   // ========== 起動処理 ==========
@@ -63,8 +63,7 @@ const App = {
   },
 
   loadSettings() {
-    const defaults = { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16, todayLearningCount: 20 };
-    this.state.settings = { ...defaults, ...this.storage.get('settings', {}) };
+    this.state.settings = this.storage.get('settings', this.state.settings);
   },
   saveSettings() {
     this.storage.set('settings', this.state.settings);
@@ -90,7 +89,6 @@ const App = {
     progress[questionId].lastAnswer = userAnswer;
     progress[questionId].lastResult = isCorrect;
     progress[questionId].lastDate = today;
-    this.updateReviewSchedule(progress[questionId], isCorrect, today);
     progress[questionId].history.push({ date: today, correct: isCorrect, answer: userAnswer });
     if (progress[questionId].history.length > 50) progress[questionId].history.shift();
     this.storage.set('progress', progress);
@@ -143,91 +141,6 @@ const App = {
   },
   isBookmarked(qId) { return this.getBookmarks().includes(qId); },
 
-  // ========== 演習セッションの途中保存 ==========
-  serializeSession(session) {
-    if (!session || !Array.isArray(session.questions)) return null;
-    return {
-      title: session.title,
-      index: session.index || 0,
-      from: session.from || 'practice',
-      savedAt: new Date().toISOString(),
-      questionIds: session.questions.map(q => q.id),
-      results: (session.results || []).map(r => ({
-        qid: r.q?.id || r.qid,
-        userAnswer: r.userAnswer,
-        isCorrect: r.isCorrect
-      }))
-    };
-  },
-  hydrateSession(saved) {
-    if (!saved || !Array.isArray(saved.questionIds)) return null;
-    const questions = saved.questionIds
-      .map(id => this.state.questions.find(q => q.id === id))
-      .filter(Boolean);
-    if (questions.length === 0) return null;
-
-    const safeIndex = Math.min(Math.max(saved.index || 0, 0), questions.length - 1);
-    const results = (saved.results || []).map(r => {
-      const q = this.state.questions.find(x => x.id === r.qid);
-      return q ? { q, userAnswer: r.userAnswer, isCorrect: r.isCorrect } : null;
-    }).filter(Boolean);
-
-    return {
-      questions,
-      title: saved.title || '保存中の演習',
-      index: safeIndex,
-      from: saved.from || 'practice',
-      results
-    };
-  },
-  saveActiveSession() {
-    const serialized = this.serializeSession(this.state.currentSession);
-    if (!serialized) return;
-    this.storage.set('activeSession', serialized);
-  },
-  getActiveSession() {
-    const saved = this.storage.get('activeSession', null);
-    const session = this.hydrateSession(saved);
-    if (!session) return null;
-    if (session.index >= session.questions.length) return null;
-    return session;
-  },
-  clearActiveSession() {
-    try { localStorage.removeItem('cams.activeSession'); }
-    catch (e) { console.warn('Failed to clear active session', e); }
-  },
-  resumeActiveSession() {
-    const session = this.getActiveSession();
-    if (!session) {
-      alert('再開できる演習はありません。');
-      return;
-    }
-    this.state.currentSession = session;
-    this.navigate('question');
-  },
-  describeActiveSession() {
-    const session = this.getActiveSession();
-    if (!session) return null;
-    const saved = this.storage.get('activeSession', {});
-    return {
-      title: session.title,
-      index: session.index + 1,
-      total: session.questions.length,
-      remaining: Math.max(0, session.questions.length - session.index),
-      savedAt: this.formatSavedAt(saved?.savedAt)
-    };
-  },
-  formatSavedAt(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return '';
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mi = String(d.getMinutes()).padStart(2, '0');
-    return `${mm}/${dd} ${hh}:${mi}`;
-  },
-
   // ========== 試験履歴 ==========
   getExamHistory() { return this.storage.get('exams', []); },
   saveExamResult(result) {
@@ -241,154 +154,6 @@ const App = {
   formatDate(d) {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   },
-  parseDate(dateStr) {
-    if (!dateStr) return null;
-    const [y, m, d] = dateStr.split('-').map(Number);
-    return new Date(y, m - 1, d);
-  },
-  addDays(dateStr, days) {
-    const d = this.parseDate(dateStr) || new Date();
-    d.setDate(d.getDate() + days);
-    return this.formatDate(d);
-  },
-  daysBetween(fromDate, toDate) {
-    const from = this.parseDate(fromDate);
-    const to = this.parseDate(toDate);
-    if (!from || !to) return 0;
-    return Math.floor((to - from) / 86400000);
-  },
-
-  // ========== 忘却曲線・間隔反復 ==========
-  updateReviewSchedule(item, isCorrect, today) {
-    const intervals = [1, 3, 7, 14, 30, 60];
-    const currentLevel = Number.isFinite(item.reviewLevel) ? item.reviewLevel : 0;
-
-    if (isCorrect) {
-      item.reviewLevel = Math.min(currentLevel + 1, intervals.length);
-      item.intervalDays = intervals[item.reviewLevel - 1] || intervals[intervals.length - 1];
-    } else {
-      item.lapseCount = (item.lapseCount || 0) + 1;
-      item.reviewLevel = Math.max(0, currentLevel - 2);
-      item.intervalDays = 1;
-    }
-
-    item.nextReviewDate = this.addDays(today, item.intervalDays);
-  },
-  getReviewDueDate(progressItem, today) {
-    if (!progressItem || !progressItem.attempts) return null;
-    return progressItem.nextReviewDate || today;
-  },
-  getDueReviewQuestions(limit = Infinity) {
-    const progress = this.getProgress();
-    const today = this.formatDate(new Date());
-
-    return this.state.questions
-      .filter(q => {
-        const p = progress[q.id];
-        const dueDate = this.getReviewDueDate(p, today);
-        return dueDate && dueDate <= today;
-      })
-      .sort((a, b) => {
-        const pa = progress[a.id] || {};
-        const pb = progress[b.id] || {};
-        const da = this.getReviewDueDate(pa, today);
-        const db = this.getReviewDueDate(pb, today);
-        const overdueA = this.daysBetween(da, today);
-        const overdueB = this.daysBetween(db, today);
-        if (overdueB !== overdueA) return overdueB - overdueA;
-
-        const lapseA = pa.lapseCount || 0;
-        const lapseB = pb.lapseCount || 0;
-        if (lapseB !== lapseA) return lapseB - lapseA;
-
-        const rateA = pa.attempts ? pa.correct / pa.attempts : 1;
-        const rateB = pb.attempts ? pb.correct / pb.attempts : 1;
-        return rateA - rateB;
-      })
-      .slice(0, limit);
-  },
-  getReviewSummary() {
-    const progress = this.getProgress();
-    const today = this.formatDate(new Date());
-    let due = 0, overdue = 0, scheduled = 0;
-
-    this.state.questions.forEach(q => {
-      const p = progress[q.id];
-      if (!p || !p.attempts) return;
-      const dueDate = this.getReviewDueDate(p, today);
-      if (!dueDate) return;
-      if (dueDate <= today) {
-        due++;
-        if (dueDate < today) overdue++;
-      } else {
-        scheduled++;
-      }
-    });
-
-    return { due, overdue, scheduled };
-  },
-  getTodayLearningQuestions(limit = null) {
-    const progress = this.getProgress();
-    limit = limit || this.state.settings.todayLearningCount || 20;
-    const today = this.formatDate(new Date());
-    const selected = [];
-    const used = new Set();
-
-    const add = (list) => {
-      list.forEach(q => {
-        if (selected.length >= limit) return;
-        if (!q || used.has(q.id)) return;
-        used.add(q.id);
-        selected.push(q);
-      });
-    };
-
-    const due = this.getDueReviewQuestions(limit);
-    add(due);
-
-    const recentWrong = this.state.questions
-      .filter(q => {
-        const p = progress[q.id];
-        return p && p.lastResult === false && !used.has(q.id);
-      })
-      .sort((a, b) => (progress[b.id]?.lastDate || '').localeCompare(progress[a.id]?.lastDate || ''));
-    add(recentWrong);
-
-    const weak = this.state.questions
-      .filter(q => {
-        const p = progress[q.id];
-        return p && p.attempts >= 2 && !used.has(q.id);
-      })
-      .sort((a, b) => {
-        const pa = progress[a.id], pb = progress[b.id];
-        return (pa.correct / pa.attempts) - (pb.correct / pb.attempts);
-      });
-    add(weak);
-
-    const unseen = this.shuffleArray(this.state.questions.filter(q => !progress[q.id]));
-    add(unseen);
-
-    return selected;
-  },
-  startTodayLearningSession(from = 'home') {
-    const count = this.state.settings.todayLearningCount || 20;
-    const qs = this.getTodayLearningQuestions(count);
-    if (qs.length === 0) {
-      alert('今日の学習対象はまだありません。まずはユニット別演習かランダム出題で問題を解いてください。');
-      return;
-    }
-    this.startSession(qs, '今日の学習', { from });
-  },
-  startDueReviewSession(from = 'review') {
-    const count = this.state.settings.todayLearningCount || 20;
-    const qs = this.getDueReviewQuestions(count);
-    if (qs.length === 0) {
-      alert('今日が復習期限の問題はありません。');
-      return;
-    }
-    this.startSession(qs, '今日の復習', { from });
-  },
-
   shuffleArray(arr) {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -458,7 +223,6 @@ const App = {
     const isMain = ['home','practice','textbook','exam','review','stats'].includes(screen);
     document.getElementById('back-btn').classList.toggle('hidden', isMain);
     document.getElementById('tab-nav').style.display = isMain ? 'flex' : 'none';
-    document.body.classList.toggle('has-tab-nav', isMain);
     
     const renderers = {
       home: () => this.renderHome(),
@@ -514,11 +278,6 @@ const App = {
     const greetEmoji = hour < 11 ? '☀️' : hour < 17 ? '🌤' : hour < 22 ? '🌙' : '🌃';
     
     const weak = this.getWeaknesses(3);
-    const activeSession = this.describeActiveSession();
-    const reviewSummary = this.getReviewSummary();
-    const todayLearningCount = this.state.settings.todayLearningCount || 20;
-    const todayPlanCount = this.getTodayLearningQuestions(todayLearningCount).length;
-    const countOptions = [5, 10, 20, 30, 50, 100];
 
     let html = `
       <div class="greeting">
@@ -528,53 +287,17 @@ const App = {
       </div>
     `;
 
-    if (activeSession) {
-      html += `
-        <div class="resume-session-card" id="resume-session-card">
-          <div class="resume-session-main">
-            <div class="label">⏸ 保存中の演習</div>
-            <div class="title">${activeSession.title}</div>
-            <div class="meta">${activeSession.index}/${activeSession.total}問目 ・ 残り${activeSession.remaining}問${activeSession.savedAt ? ` ・ ${activeSession.savedAt}保存` : ''}</div>
-          </div>
-          <button class="resume-session-btn" id="resume-session-btn">再開</button>
-        </div>
-      `;
-    }
-
     if (lastQ) {
       html += `
         <div class="continue-card" id="continue-card">
-          <div class="label">📚 最後に解いた問題</div>
+          <div class="label">📚 続きから</div>
           <div class="title">${lastQ.unit} #${lastQ.no} まで完了</div>
-          <div class="meta">同じユニットの続きから再開 →</div>
+          <div class="meta">タップで再開 →</div>
         </div>
       `;
     }
 
     html += `
-      <div class="today-study-card">
-        <div class="today-study-head">
-          <div>
-            <div class="label">🧠 忘却曲線ベース</div>
-            <div class="title">今日の学習</div>
-            <div class="desc">復習期限・誤答・未解答を自動で組み合わせます</div>
-          </div>
-          <div class="today-study-count">${todayPlanCount}<span>問</span></div>
-        </div>
-        <div class="review-pill-grid">
-          <div class="review-pill"><span>期限切れ</span><strong>${reviewSummary.overdue}</strong></div>
-          <div class="review-pill"><span>今日の復習</span><strong>${reviewSummary.due}</strong></div>
-          <div class="review-pill"><span>予約済み</span><strong>${reviewSummary.scheduled}</strong></div>
-        </div>
-        <div class="study-count-selector">
-          <div class="study-count-label">今回解く問題数</div>
-          <div class="study-count-buttons">
-            ${countOptions.map(n => `<button class="count-chip ${n === todayLearningCount ? 'active' : ''}" data-count="${n}">${n}</button>`).join('')}
-          </div>
-        </div>
-        <button class="btn-primary today-study-btn" id="today-study-btn">今日の学習を始める</button>
-      </div>
-
       <div class="stat-card">
         <div class="label">📈 全体進捗</div>
         <div class="progress-row">
@@ -647,14 +370,6 @@ const App = {
 
     document.getElementById('content').innerHTML = html;
     
-    document.getElementById('resume-session-card')?.addEventListener('click', () => {
-      this.resumeActiveSession();
-    });
-    document.getElementById('resume-session-btn')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.resumeActiveSession();
-    });
-
     document.getElementById('continue-card')?.addEventListener('click', () => {
       const q = this.state.questions.find(x => x.id === lastQ.id);
       if (q) {
@@ -666,18 +381,6 @@ const App = {
       }
     });
     
-    document.querySelectorAll('.count-chip').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this.state.settings.todayLearningCount = Number(btn.dataset.count);
-        this.saveSettings();
-        this.renderHome();
-      });
-    });
-
-    document.getElementById('today-study-btn')?.addEventListener('click', () => {
-      this.startTodayLearningSession('home');
-    });
-
     document.querySelectorAll('.quick-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.dataset.action;
@@ -708,45 +411,7 @@ const App = {
       unitStats[u] = { total: qs.length, answered, pct: Math.round(answered / qs.length * 100) };
     });
 
-    const reviewSummary = this.getReviewSummary();
-    const activeSession = this.describeActiveSession();
-    const todayLearningCount = this.state.settings.todayLearningCount || 20;
-    const todayPlanCount = this.getTodayLearningQuestions(todayLearningCount).length;
-    const countOptions = [5, 10, 20, 30, 50, 100];
-
     let html = `
-      ${activeSession ? `
-        <div class="resume-session-card compact" id="practice-resume-session-card">
-          <div class="resume-session-main">
-            <div class="label">⏸ 保存中の演習</div>
-            <div class="title">${activeSession.title}</div>
-            <div class="meta">${activeSession.index}/${activeSession.total}問目 ・ 残り${activeSession.remaining}問${activeSession.savedAt ? ` ・ ${activeSession.savedAt}保存` : ''}</div>
-          </div>
-          <button class="resume-session-btn" id="practice-resume-session-btn">再開</button>
-        </div>
-      ` : ''}
-
-      <div class="mode-card featured-mode" id="today-learning-mode">
-        <div class="mode-header">
-          <span class="mode-icon">🧠</span>
-          <div class="mode-info">
-            <div class="title">今日の学習</div>
-            <div class="desc">忘却曲線ベースで ${todayPlanCount}問を自動出題</div>
-          </div>
-        </div>
-        <div class="mode-metrics">
-          <span>今回 ${todayLearningCount}問</span>
-          <span>期限切れ ${reviewSummary.overdue}</span>
-          <span>復習 ${reviewSummary.due}</span>
-          <span>予約済み ${reviewSummary.scheduled}</span>
-        </div>
-        <div class="study-count-selector compact">
-          <div class="study-count-buttons">
-            ${countOptions.map(n => `<button class="count-chip ${n === todayLearningCount ? 'active' : ''}" data-count="${n}">${n}</button>`).join('')}
-          </div>
-        </div>
-      </div>
-
       <div class="mode-card" id="unit-mode">
         <div class="mode-header">
           <span class="mode-icon">📚</span>
@@ -793,7 +458,7 @@ const App = {
           <span class="mode-icon">💪</span>
           <div class="mode-info">
             <div class="title">弱点克服モード</div>
-            <div class="desc">正答率から苦手問題を自動選定 → 10問</div>
+            <div class="desc">AIが苦手分野を自動選定 → 10問</div>
           </div>
         </div>
       </div>
@@ -811,33 +476,12 @@ const App = {
 
     document.getElementById('content').innerHTML = html;
 
-    document.getElementById('practice-resume-session-card')?.addEventListener('click', () => {
-      this.resumeActiveSession();
-    });
-    document.getElementById('practice-resume-session-btn')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.resumeActiveSession();
-    });
-
     document.querySelectorAll('.unit-row').forEach(row => {
       row.addEventListener('click', () => {
         const unit = row.dataset.unit;
         const qs = this.state.questions.filter(q => q.unit === unit);
         this.startSession(qs, `${unit} 順番通り`, { from: 'practice' });
       });
-    });
-
-    document.querySelectorAll('.count-chip').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.state.settings.todayLearningCount = Number(btn.dataset.count);
-        this.saveSettings();
-        this.renderPractice();
-      });
-    });
-
-    document.getElementById('today-learning-mode').addEventListener('click', () => {
-      this.startTodayLearningSession('practice');
     });
 
     document.getElementById('random-mode').addEventListener('click', () => {
@@ -978,7 +622,6 @@ const App = {
       results: [],
       from: opts.from || 'practice'
     };
-    this.saveActiveSession();
     this.navigate('question');
   },
 
@@ -987,12 +630,9 @@ const App = {
     const session = this.state.currentSession;
     if (!session) { this.navigate('home'); return; }
     if (session.index >= session.questions.length) {
-      this.clearActiveSession();
       this.navigate('session-complete');
       return;
     }
-
-    this.saveActiveSession();
 
     const q = session.questions[session.index];
     this.state.currentQuestion = q;
@@ -1000,11 +640,7 @@ const App = {
 
     const isBookmarked = this.isBookmarked(q.id);
     const lvClass = q.level === 'Lv.1' ? 'lv1' : q.level === 'Lv.2' ? 'lv2' : 'lv3';
-    const progress = ((session.index + 1) / session.questions.length) * 100;
-    const qProgress = this.getProgress()[q.id];
-    const reviewMeta = qProgress && qProgress.attempts
-      ? `過去 ${qProgress.correct}/${qProgress.attempts} 正解 ・ 記憶Lv.${qProgress.reviewLevel || 0}${qProgress.nextReviewDate ? ` ・ 次回 ${qProgress.nextReviewDate}` : ''}`
-      : '初回出題';
+    const progress = ((session.index) / session.questions.length) * 100;
 
     let html = `
       <div class="question-progress"><div class="fill" style="width:${progress}%"></div></div>
@@ -1017,7 +653,7 @@ const App = {
         <button class="icon-btn" id="bookmark-btn">${isBookmarked ? '🔖' : '📑'}</button>
       </div>
       
-      <div class="q-page">${q.unit} #${q.no} ・ p.${q.page} ・ ${q.section}<br><span class="review-meta-line">🧠 ${reviewMeta}</span><br><span class="see-textbook-link" id="see-textbook">📖 教科書のp.${q.page}を見る</span></div>
+      <div class="q-page">${q.unit} #${q.no} ・ p.${q.page} ・ ${q.section}<br><span class="see-textbook-link" id="see-textbook">📖 教科書のp.${q.page}を見る</span></div>
 
       <div class="question-card">${this.escapeHtml(q.question)}</div>
 
@@ -1059,7 +695,7 @@ const App = {
     });
 
     document.getElementById('see-textbook')?.addEventListener('click', () => {
-      this.jumpToTextbook(q.unit, q.page);
+      this.jumpToTextbook(this.unitForPage(q.page, q.unit), q.page);
     });
 
     this.setupSwipe();
@@ -1071,17 +707,6 @@ const App = {
     this.storage.set('lastQuestion', { id: q.id, unit: q.unit, no: q.no });
     
     this.state.currentSession.results.push({ q, userAnswer, isCorrect });
-
-    // 閉じた場合は「解答済みの問題」ではなく「次の未解答問題」から再開する
-    const savedIndex = this.state.currentSession.index;
-    this.state.currentSession.index = Math.min(savedIndex + 1, this.state.currentSession.questions.length);
-    if (this.state.currentSession.index >= this.state.currentSession.questions.length) {
-      this.clearActiveSession();
-    } else {
-      this.saveActiveSession();
-    }
-    this.state.currentSession.index = savedIndex;
-
     this.vibrate(isCorrect ? [50] : [50, 50, 50]);
 
     document.querySelectorAll('.choice').forEach(btn => {
@@ -1094,15 +719,8 @@ const App = {
 
     const banner = `
       <div class="explanation-card">
-        <div class="explanation-head">
-          <div class="label">📖 解説</div>
-          <div class="answer-summary ${isCorrect ? 'correct' : 'incorrect'}">
-            <span class="answer-summary-icon">${isCorrect ? '✓' : '×'}</span>
-            <span class="answer-summary-title">${isCorrect ? '正解' : '不正解'}</span>
-            <span class="answer-summary-meta">正答：${q.answer} ／ あなたの解答：${userAnswer}</span>
-          </div>
-        </div>
-        <div class="text">${this.escapeHtml(q.explanation)}</div>
+        <div class="label">📖 解説</div>
+        <div class="text">${this.formatExplanation(q.explanation)}</div>
       </div>
       <div class="fixed-actions">
         <button class="btn-secondary" id="bookmark-after">🔖</button>
@@ -1117,11 +735,6 @@ const App = {
     
     document.getElementById('next-btn').addEventListener('click', () => {
       this.state.currentSession.index++;
-      if (this.state.currentSession.index >= this.state.currentSession.questions.length) {
-        this.clearActiveSession();
-      } else {
-        this.saveActiveSession();
-      }
       this.navigate('question');
     });
     
@@ -1151,7 +764,6 @@ const App = {
 
   // ========== セッション完了画面 ==========
   renderSessionComplete() {
-    this.clearActiveSession();
     const session = this.state.currentSession;
     this.setTitle('お疲れ様でした！');
     const correct = session.results.filter(r => r.isCorrect).length;
@@ -1466,8 +1078,6 @@ const App = {
       progress[q.id] && progress[q.id].lastResult === false
     );
     const bookmarked = this.state.questions.filter(q => bookmarks.includes(q.id));
-    const dueReview = this.getDueReviewQuestions(999);
-    const todayLearningCount = this.state.settings.todayLearningCount || 20;
     const repeatWrong = this.state.questions.filter(q => {
       const p = progress[q.id];
       if (!p || p.history.length < 2) return false;
@@ -1477,14 +1087,12 @@ const App = {
 
     const html = `
       <div class="review-tabs">
-        <button class="stat-tab active" data-tab="due">今日 ${dueReview.length}</button>
-        <button class="stat-tab" data-tab="wrong">誤答 ${wrong.length}</button>
-        <button class="stat-tab" data-tab="repeat">連続誤答 ${repeatWrong.length}</button>
+        <button class="stat-tab active" data-tab="wrong">誤答 ${wrong.length}</button>
+        <button class="stat-tab" data-tab="repeat">要復習 ${repeatWrong.length}</button>
         <button class="stat-tab" data-tab="bookmark">🔖 ${bookmarks.length}</button>
       </div>
       <div id="review-content"></div>
-      ${dueReview.length > 0 ? `<button class="btn-primary" id="due-review" style="margin-top:16px;">🧠 今日の復習を${Math.min(todayLearningCount, dueReview.length)}問始める</button>` : ''}
-      ${wrong.length > 0 ? `<button class="btn-secondary" id="quick-review" style="margin-top:12px;width:100%;">🎲 誤答から5問復習</button>` : ''}
+      ${wrong.length > 0 ? `<button class="btn-primary" id="quick-review" style="margin-top:16px;">🎲 ランダムに5問復習</button>` : ''}
     `;
     document.getElementById('content').innerHTML = html;
 
@@ -1516,22 +1124,17 @@ const App = {
       });
     };
 
-    renderList(dueReview, '今日が復習期限の問題はありません');
+    renderList(wrong, '誤答した問題はまだありません');
 
     document.querySelectorAll('.stat-tab').forEach(tab => {
       tab.addEventListener('click', () => {
         document.querySelectorAll('.stat-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         const t = tab.dataset.tab;
-        if (t === 'due') renderList(dueReview, '今日が復習期限の問題はありません');
-        else if (t === 'wrong') renderList(wrong, '誤答した問題はまだありません');
-        else if (t === 'repeat') renderList(repeatWrong, '連続誤答の問題はまだありません');
+        if (t === 'wrong') renderList(wrong, '誤答した問題はまだありません');
+        else if (t === 'repeat') renderList(repeatWrong, '要復習の問題はまだありません');
         else renderList(bookmarked, 'ブックマークはまだありません');
       });
-    });
-
-    document.getElementById('due-review')?.addEventListener('click', () => {
-      this.startDueReviewSession('review');
     });
 
     document.getElementById('quick-review')?.addEventListener('click', () => {
@@ -1777,7 +1380,7 @@ const App = {
     document.getElementById('set-reset').addEventListener('click', () => {
       if (confirm('すべての学習データを削除しますか？\n（この操作は取り消せません）')) {
         if (confirm('本当に削除しますか？\n進捗、誤答リスト、ブックマーク、試験履歴がすべて消えます。')) {
-          ['progress','bookmarks','streak','daily','exams','lastQuestion','lastFilter','activeSession'].forEach(k => {
+          ['progress','bookmarks','streak','daily','exams','lastQuestion','lastFilter'].forEach(k => {
             localStorage.removeItem(`cams.${k}`);
           });
           alert('削除しました');
@@ -1990,6 +1593,24 @@ const App = {
         this.navigate('textbook-viewer', { unit, pageIdx: 0 });
       }
     }
+  },
+
+  // 本文ページ番号から教科書のユニットを判定（U1:1-108 / U2:109-197 / U3:198-309 / U4:310-413）
+  unitForPage(page, fallback) {
+    const p = parseInt(page);
+    if (isNaN(p)) return fallback;
+    if (p <= 108) return 'U1';
+    if (p <= 197) return 'U2';
+    if (p <= 309) return 'U3';
+    if (p <= 413) return 'U4';
+    return fallback;
+  },
+
+  // 解説：HTMLエスケープ後、**太字** と改行を表示用に変換
+  formatExplanation(s) {
+    return this.escapeHtml(s)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
   },
 
   escapeHtml(s) {
