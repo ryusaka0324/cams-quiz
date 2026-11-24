@@ -13,7 +13,7 @@ const App = {
     currentSession: null,
     examState: null,
     textbookState: { unit: null, page: null },
-    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16 }
+    settings: { darkMode: false, fontSize: 'medium', dailyGoal: 10, textbookFontSize: 16, examDate: '2026-12-19', newCutoffDays: 7 }
   },
 
   // ========== 起動処理 ==========
@@ -63,7 +63,8 @@ const App = {
   },
 
   loadSettings() {
-    this.state.settings = this.storage.get('settings', this.state.settings);
+    // 既存の保存設定に新しい項目（試験日など）の初期値を補う
+    this.state.settings = Object.assign({}, this.state.settings, this.storage.get('settings', {}));
   },
   saveSettings() {
     this.storage.set('settings', this.state.settings);
@@ -192,9 +193,69 @@ const App = {
     const scored = this.state.questions.map(q => {
       const p = progress[q.id];
       if (!p || p.attempts === 0) return { q, score: 0.5 };
-      return { q, score: p.correct / p.attempts };
+      const recent = (p.history || []).slice(-3);
+      if (recent.length === 0) return { q, score: p.correct / p.attempts };
+      return { q, score: recent.filter(h => h.correct).length / recent.length };
     });
     return scored.sort((a, b) => a.score - b.score).slice(0, count).map(x => x.q);
+  },
+
+  // ========== 忘却曲線（間隔反復）==========
+  // ライトナー方式：初回正解→3日後、以降 正解するたびに 7日→14日→30日。間違えたら翌日に戻す。
+  // 期限前に正解しても段階は上げない。試験日に向けた間隔の圧縮は行わない
+  // （圧縮すると試験直前に全問が毎日の復習対象になり、1日数百問になるため）。
+  SRS_INTERVALS: [1, 3, 7, 14, 30],
+  parseDate(s) { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, m - 1, d); },
+  addDays(s, n) { const d = this.parseDate(s); d.setDate(d.getDate() + n); return this.formatDate(d); },
+  daysBetween(a, b) { return Math.round((this.parseDate(b) - this.parseDate(a)) / 86400000); },
+  srsInterval(box, fromDate) {
+    return this.SRS_INTERVALS[Math.min(box, this.SRS_INTERVALS.length - 1)];
+  },
+  // 解答履歴（日付つき）から各問題の段階と次回期限を再計算する
+  srsState(p) {
+    if (!p || !p.history || p.history.length === 0) return null;
+    let box = 0, due = null;
+    p.history.forEach(h => {
+      if (!h.date) return;
+      if (!h.correct) { box = 0; due = this.addDays(h.date, 1); return; }
+      if (due === null) { box = 1; due = this.addDays(h.date, this.srsInterval(1, h.date)); return; }
+      if (h.date >= due) {
+        box = Math.min(box + 1, this.SRS_INTERVALS.length - 1);
+        due = this.addDays(h.date, this.srsInterval(box, h.date));
+      }
+    });
+    return { box, due, first: p.history[0].date };
+  },
+  getStudyPlan() {
+    const progress = this.getProgress();
+    const today = this.formatDate(new Date());
+    const s = this.state.settings;
+    const due = [], unseen = [];
+    let newToday = 0, mastered = 0, learning = 0;
+    this.state.questions.forEach(q => {
+      const st = this.srsState(progress[q.id]);
+      if (!st) { unseen.push(q); return; }
+      if (st.first === today) newToday++;
+      if (st.box >= 3) mastered++; else learning++;
+      if (st.due <= today) due.push({ q, st });
+    });
+    due.sort((a, b) => (a.st.due < b.st.due ? -1 : a.st.due > b.st.due ? 1 : a.st.box - b.st.box));
+    const daysToExam = s.examDate ? this.daysBetween(today, s.examDate) : null;
+    const cutoff = s.examDate ? this.addDays(s.examDate, -(s.newCutoffDays || 7)) : null;
+    const newDaysLeft = cutoff ? Math.max(1, this.daysBetween(today, cutoff) + 1) : 14;
+    const quota = (cutoff && today > cutoff) ? unseen.length + newToday
+      : Math.ceil((unseen.length + newToday) / newDaysLeft);
+    const newRemaining = Math.max(0, Math.min(unseen.length, quota - newToday));
+    return { today, due: due.map(x => x.q), unseen, newRemaining, newToday, quota,
+             mastered, learning, daysToExam, cutoff, total: this.state.questions.length };
+  },
+  startTodaySession() {
+    const plan = this.getStudyPlan();
+    const CHUNK = 20;
+    const qs = plan.due.slice(0, CHUNK);
+    if (qs.length < CHUNK) qs.push(...plan.unseen.slice(0, Math.min(plan.newRemaining, CHUNK - qs.length)));
+    if (qs.length === 0) { alert('今日の復習と新規の問題は完了しています'); return; }
+    this.startSession(qs, '今日の学習', { from: 'home' });
   },
 
   // ========== ナビゲーション ==========
@@ -287,6 +348,33 @@ const App = {
       </div>
     `;
 
+    const plan = this.getStudyPlan();
+    const todayTotal = plan.due.length + plan.newRemaining;
+    const masteredPct = Math.round(plan.mastered / plan.total * 100);
+    const examLabel = plan.daysToExam === null ? '試験日未設定（⚙️で設定）'
+      : plan.daysToExam > 0 ? `試験まであと${plan.daysToExam}日（${s_md(this.state.settings.examDate)}）`
+      : plan.daysToExam === 0 ? '今日が試験日です' : '試験日を過ぎています（⚙️で更新）';
+    function s_md(d) { const [y, m, dd] = d.split('-'); return `${Number(m)}/${Number(dd)}`; }
+    html += `
+      <div class="stat-card srs-card">
+        <div class="label">📅 ${examLabel}</div>
+        <div class="srs-row">
+          <div class="srs-num"><span>${plan.due.length}</span>復習</div>
+          <div class="srs-num"><span>${plan.newRemaining}</span>新規</div>
+          <div class="srs-num"><span>${plan.mastered}</span>定着</div>
+        </div>
+        <div class="progress-row">
+          <span class="value">定着 ${plan.mastered} / ${plan.total}問（間隔14日以上まで進んだ問題）</span>
+          <span class="num">${masteredPct}%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${masteredPct}%"></div></div>
+        <div class="srs-meta">新規は1日${plan.quota}問ペース（${plan.cutoff ? s_md(plan.cutoff) : '-'}までに全問を一巡）</div>
+        <button class="btn-primary" id="today-btn" style="margin-top:12px;width:100%;" ${todayTotal === 0 ? 'disabled' : ''}>
+          ${todayTotal === 0 ? '✅ 今日の分は完了' : `▶ 今日の学習を始める（残り${todayTotal}問・20問ずつ）`}
+        </button>
+      </div>
+    `;
+
     if (lastQ) {
       html += `
         <div class="continue-card" id="continue-card">
@@ -370,6 +458,8 @@ const App = {
 
     document.getElementById('content').innerHTML = html;
     
+    document.getElementById('today-btn')?.addEventListener('click', () => this.startTodaySession());
+
     document.getElementById('continue-card')?.addEventListener('click', () => {
       const q = this.state.questions.find(x => x.id === lastQ.id);
       if (q) {
@@ -1340,6 +1430,10 @@ const App = {
         </div>
       </div>
       <div class="setting-row">
+        <span class="label">📅 試験日</span>
+        <input type="date" id="set-exam" value="${s.examDate || ''}" style="font-size:15px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg, #fff);color:inherit;">
+      </div>
+      <div class="setting-row">
         <span class="label">📤 データエクスポート</span>
         <button class="btn-secondary" id="set-export">📥 保存</button>
       </div>
@@ -1348,7 +1442,7 @@ const App = {
         <button class="btn-secondary" id="set-reset" style="color:var(--danger);">削除</button>
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);text-align:center;font-size:12px;color:var(--text-light);">
-        CAMS試験対策 PWA v1.0<br>
+        CAMS試験対策 PWA v2.1（忘却曲線対応）<br>
         全${this.state.questions.length}問 / スタディガイド v7.03 完全網羅
       </div>
     `;
@@ -1373,6 +1467,12 @@ const App = {
       document.getElementById('goal-display').textContent = goal + '問';
       this.state.settings.dailyGoal = goal;
       this.saveSettings();
+    });
+
+    document.getElementById('set-exam').addEventListener('change', (e) => {
+      this.state.settings.examDate = e.target.value || null;
+      this.saveSettings();
+      if (this.state.currentScreen === 'home') this.renderHome();
     });
 
     document.getElementById('set-export').addEventListener('click', () => this.exportData());
@@ -1466,6 +1566,23 @@ const App = {
     }
   },
 
+  // 画像ユニット（U2・U5）はページ画像を1ファイルにまとめたJSONから必要時に読み込む
+  tbImage(unit, tb, page) {
+    this._tbPacks = this._tbPacks || {};
+    const pack = this._tbPacks[unit];
+    if (pack && pack !== 'loading') return pack[page.key] || null;
+    if (!pack && tb.pack) {
+      this._tbPacks[unit] = 'loading';
+      fetch('./' + tb.pack).then(r => r.json()).then(data => {
+        this._tbPacks[unit] = data;
+        if (this.state.currentScreen === 'textbook-viewer' && this.state.textbookState.unit === unit) {
+          this.renderTextbookViewer({ unit, pageIdx: this.state.textbookState.page });
+        }
+      }).catch(() => { this._tbPacks[unit] = null; alert('教科書画像の読み込みに失敗しました'); });
+    }
+    return null;
+  },
+
   renderTextbookViewer(params) {
     const unit = params.unit || this.state.textbookState.unit;
     let pageIdx = params.pageIdx !== undefined ? params.pageIdx : this.state.textbookState.page || 0;
@@ -1502,7 +1619,10 @@ const App = {
     if (tb.type === 'text') {
       html += `<div class="textbook-page-content" style="--tb-font-size:${fontSize}px;font-size:${fontSize}px;">${page.html}</div>`;
     } else {
-      html += `<div class="textbook-image-wrapper"><img src="${page.image}" alt="p.${page.page}" loading="eager"></div>`;
+      const src = page.image || this.tbImage(unit, tb, page);
+      html += src
+        ? `<div class="textbook-image-wrapper"><img src="${src}" alt="p.${page.page}" loading="eager"></div>`
+        : `<div class="textbook-image-wrapper" style="padding:40px;text-align:center;color:var(--text-secondary);">ページ画像を読み込み中…</div>`;
     }
 
     html += `

@@ -59,21 +59,16 @@
    - 「Quick setup」ボックス内にあります
    - またはURL末尾を `/upload/main` に変えてもOK
 
-2. **重要**: ZIPファイル（`cams-pwa.zip`）を**展開してから**アップロード
-   - Macなら：ZIPをダブルクリック → `cams-pwa` フォルダができる
-   - その**フォルダの中身**（`index.html`、`app.js` など9個のファイル）を選択
-   - フォルダごとではなく**ファイルだけ**をドラッグ&ドロップ
+2. **重要**: ZIPを展開すると、フォルダのない13個のファイルが出てきます（iPhoneは「ファイル」アプリでZIPをタップすると展開）
+   - 13個すべてを選択してアップロード（フォルダは含まれていません）
 
-3. アップロード対象（9ファイル）:
-   - ✅ `index.html`
-   - ✅ `app.js`
-   - ✅ `styles.css`
-   - ✅ `manifest.json`
-   - ✅ `service-worker.js`
-   - ✅ `questions.json`
-   - ✅ `icon-192.png`
-   - ✅ `icon-512.png`
-   - ✅ `apple-touch-icon.png`
+3. アップロード対象（13ファイル）:
+   - ✅ `index.html` / `app.js` / `styles.css` / `manifest.json` / `service-worker.js`
+   - ✅ `questions.json`（問題データ）
+   - ✅ `textbook.json`（教科書：U1・U3・U4の本文）
+   - ✅ `textbook-U2.json` / `textbook-U5.json`（教科書：U2・U5のページ画像）
+   - ✅ `icon-192.png` / `icon-512.png` / `apple-touch-icon.png`
+   - ✅ `README.md`（この説明書。アップロードしなくても動作します）
 
 4. 画面下部の「**Commit changes**」ボタンをクリック
 

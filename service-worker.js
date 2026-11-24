@@ -1,5 +1,5 @@
 // CAMS PWA Service Worker - オフライン対応
-const CACHE_NAME = 'cams-v3'; // 2026-11-25 問題データ全面改訂
+const CACHE_NAME = 'cams-v5'; // 2026-11-25 問題データ全面改訂＋忘却曲線
 const ASSETS = [
   './',
   './index.html',
